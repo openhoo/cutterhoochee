@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Immutable source revision to qualify when called by a release workflow
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22.23.2"
+  PNPM_VERSION: "11.3.0"
+  RUST_VERSION: "1.95.0"
+  ARCH_SNAPSHOT: "2026/08/21"
+  ARCH_IMAGE: "archlinux/archlinux@sha256:2685bf92cc6215cc922488ae8e80b4875f4bdf19fef648818b1742517ce27077"
+  HOOVERSION_VERSION: "1.1.1"
+  HOOLICY_VERSION: "0.3.2"
+  HOORAY_VERSION: "0.6.6"
+  HOONARQUBE_VERSION: "0.8.1"
+  HOONEEDSUPDATES_VERSION: "0.3.1"
+
+jobs:
+  commitlint:
+    name: Conventional Commits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Lint commit messages with Hooversion
+        uses: openhoo/hooversion/actions/lint@ac503b23b9b36ebbf39ee6103713c81f1f18b64d # v1.1.1
+        with:
+          version: ${{ env.HOOVERSION_VERSION }}
+
+  policy:
+    name: Policy and security gates
+    needs: commitlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Enforce Hoolicy repository policy
+        uses: openhoo/hoolicy/actions/check@17cac347ab3561eea664b0bee3c670de86ec3ffa # v0.3.2
+        with:
+          version: ${{ env.HOOLICY_VERSION }}
+          config: hoolicy.yaml
+          format: text
+      - name: Scan dependencies and source with Hooray
+        uses: openhoo/hooray/actions/scan@26aeb8cc43bb82248b4287037cac038185a2682d # v0.6.6
+        with:
+          version: ${{ env.HOORAY_VERSION }}
+          policy: hooray-policy.yaml
+          format: sarif
+          output: ${{ runner.temp }}/hooray.sarif
+      - name: Analyze source with Hoonarqube
+        uses: openhoo/hoonarqube/actions/analyze@36c6036b7c36849d920db793acbe4e46d68fde0f # v0.8.1
+        with:
+          version: ${{ env.HOONARQUBE_VERSION }}
+          paths: |
+            src
+            shared
+            agent/src
+            src-tauri/src
+          output: ${{ runner.temp }}/hoonarqube.json
+          fail-on: none
+      - name: Retain analysis reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: source-analysis
+          path: |
+            ${{ runner.temp }}/hooray.sarif
+            ${{ runner.temp }}/hoonarqube.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  frontend:
+    name: Frontend and agent build
+    needs: commitlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify synchronized release versions
+        run: pnpm version:check
+      - name: Build the agent and web client
+        run: |
+          set -euo pipefail
+          pnpm build:agent
+          pnpm build:web
+      - name: Run UI unit tests
+        run: pnpm test:unit
+
+  native:
+    name: Linux x86_64 native qualification
+    needs:
+      - commitlint
+      - policy
+      - frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: archlinux/archlinux@sha256:2685bf92cc6215cc922488ae8e80b4875f4bdf19fef648818b1742517ce27077
+      options: --user root
+    steps:
+      - name: Pin Arch repositories to the verified archive snapshot
+        run: |
+          set -euo pipefail
+          printf '%s\n' "Server = https://archive.archlinux.org/repos/${ARCH_SNAPSHOT}/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
+          pacman-key --init
+          pacman-key --populate archlinux
+      - name: Install reproducible native build dependencies
+        run: |
+          set -euo pipefail
+          pacman -Syyuu --noconfirm
+          pacman -S --needed --noconfirm \
+            base-devel ca-certificates curl git jq nodejs npm rustup \
+            clang cmake ninja openssl pkgconf patchelf \
+            webkit2gtk-4.1 libappindicator-gtk3 librsvg \
+            gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
+            pipewire vulkan-headers ffmpeg x264
+          test "$(pacman -Q ffmpeg)" = 'ffmpeg 2:9.0.1-1'
+          test "$(pacman -Q x264)" = 'x264 3:0.165.r3222.b35605a-2'
+      - name: Checkout immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Select the repository Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup set profile minimal
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
+          rustup default "$RUST_VERSION"
+          test "$(rustc --version | awk '{ print $2 }')" = "$RUST_VERSION"
+      - name: Set up Node.js and pnpm
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Build and test native sources
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build:agent
+          pnpm build:web
+          pnpm prepare:sidecars
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+          pnpm exec cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo run --locked --manifest-path src-tauri/Cargo.toml --example generate-types
+          git diff --exit-code -- shared/src/generated.ts
+      - name: Build and inspect the Linux AppImage
+        run: |
+          set -euo pipefail
+          version=$(tr -d '[:space:]' < VERSION)
+          appimage="src-tauri/target/release/bundle/appimage/Cutterhoochee_${version}_amd64.AppImage"
+          rm -rf src-tauri/target/release/bundle/appimage
+          pnpm bundle:linux
+          test -f "$appimage"
+          test -x "$appimage"
+          bash scripts/release/verify-appimage.sh "$appimage" "$version"

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "packs": [
+    {
+      "name": "repository",
+      "git": "https://github.com/openhoo/hoolicy.git",
+      "ref": "v0.3.2",
+      "subdir": "packs/repository",
+      "commit": "17cac347ab3561eea664b0bee3c670de86ec3ffa",
+      "digest": "sha256:b09429c7f194edefe4320215e587c2e565f325241c573551bd8f9c5d0bf0dc43",
+      "vendor": ".hoolicy/vendor/repository",
+      "release": "0.1.0"
+    }
+  ]
+}

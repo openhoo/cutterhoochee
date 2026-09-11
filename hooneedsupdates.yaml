@@ -1,0 +1,51 @@
+version: 1
+managers:
+  - gomod
+  - cargo
+  - npm
+  - nuget
+  - github-actions
+  - docker
+excludePaths:
+  - '(^|/)(fixtures|testdata|\.oracle)(/|$)'
+allowedUpdateTypes:
+  - patch
+  - minor
+  - major
+concurrency: 8
+requestTimeout: 15s
+lockfileTimeout: 5m
+includePrereleases: false
+automation:
+  repositories: []
+  branchPrefix: hooneedsupdates
+  labels: []
+  lockfiles: true
+  draft: false
+  selection:
+    updateTypes: []
+    managers: []
+    dependencies: []
+  autoMerge:
+    enabled: false
+    updateTypes: [patch, minor]
+    managers: []
+    dependencies: []
+    maxUpdates: 20
+    requireLockfiles: true
+  rateLimit:
+    stateFile: ''
+    maxRetries: 2
+    maxWait: 30s
+  mergeMethod: squash
+  closeStale: true
+  commitAuthor: HooNeedsUpdates Bot
+  commitEmail: hooneedsupdates[bot]@users.noreply.github.com
+customManagers:
+  - name: hooversion-version
+    datasource: github-releases
+    dependencyName: openhoo/hooversion
+    filePatterns:
+      - '^\.github/workflows/.*\.ya?ml$'
+    matchStrings:
+      - 'HOOVERSION_VERSION:\s*["'']?(?P<currentValue>[^\s"'']+)'

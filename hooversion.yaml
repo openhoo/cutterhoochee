@@ -1,0 +1,12 @@
+branches:
+  - main
+packages:
+  - name: cutterhoochee
+    path: .
+    type: version-file
+    manifest: VERSION
+hooks:
+  afterVersion:
+    - node scripts/release/sync-version.mjs
+github:
+  releases: false

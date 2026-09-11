@@ -1,0 +1,32 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+src-tauri/target/
+src-tauri/resources/agent/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+
+# Reproducible native staging and machine-local provenance.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+!src-tauri/binaries/resource-staging.marker
+src-tauri/resources/fonts/
+src-tauri/resources/notices/*
+!src-tauri/resources/notices/FFmpeg-GPL-3.0-only.txt
+!src-tauri/resources/notices/Inter-LICENSE.txt
+src-tauri/gen/
+sidecars/manifest.json
+
+# Generated release-planning state.
+/.hooversion/
+/.release-version
+
+# Local editing projects and credentials never belong in source control.
+*.cutproj/
+*.pem
+*.key
+auth.json
+credentials.json

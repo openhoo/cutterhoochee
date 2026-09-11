@@ -1,0 +1,31 @@
+{
+  "name": "cutterhoochee-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openhoo/cutterhoochee.git"
+  },
+  "homepage": "https://github.com/openhoo/cutterhoochee",
+  "packageManager": "pnpm@11.3.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev-desktop.mjs",
+    "dev:web": "node scripts/dev-web.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "build:shared": "pnpm --filter @cutterhoochee/shared build",
+    "build:agent": "node scripts/build-agent.mjs",
+    "prepare:sidecars": "node scripts/prepare-sidecars.mjs",
+    "build": "node scripts/build-desktop.mjs",
+    "bundle:linux": "node scripts/build-desktop.mjs --bundle-linux",
+    "test:unit": "pnpm --filter @cutterhoochee/app test:unit",
+    "version:check": "node scripts/release/sync-version.mjs --check",
+    "version:sync": "node scripts/release/sync-version.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}

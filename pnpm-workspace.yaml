@@ -1,0 +1,16 @@
+packages:
+  - src
+  - shared
+  - agent
+production: false
+allowBuilds:
+  '@google/genai': false
+  esbuild: true
+  protobufjs: false
+minimumReleaseAgeExclude:
+  - '@types/node@22.20.2'
+  - '@types/react-dom@19.3.0'
+  - '@types/react@19.3.0'
+  - react-dom@19.3.0
+  - react@19.3.0
+  - scheduler@0.28.0

@@ -1,0 +1,29 @@
+name: Dependency freshness
+
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-freshness-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Audit dependency freshness
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up HooNeedsUpdates
+        uses: openhoo/hooneedsupdates/actions/setup@ffd31b013dafcd772bb067a0eec76f739ecd76a3 # v0.3.1
+        with:
+          version: "0.3.1"
+      - name: Scan unresolved dependency updates
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: hooneedsupdates scan --fail-on unresolved .

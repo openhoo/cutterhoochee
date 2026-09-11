@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cutterhoochee — User guide</title><link rel="stylesheet" href="assets/user-guide.css"></head><body><a class="skip-link" href="#main">Skip to content</a><nav class="site-nav" aria-label="Documentation"><a href="index.html">Cutterhoochee</a><a href="user-guide.en.html" lang="en">English</a><a href="user-guide.de.html" lang="de">Deutsch</a></nav><main id="main"><h1 id="cutterhoochee-user-guide-english">Cutterhoochee user guide (English)</h1>
+<p>Cutterhoochee is a local-first desktop video editor. This guide describes the controls and workflows that are present in the current application. Control names are kept in their exact English form so that you can match the guide to the UI.</p>
+<blockquote>
+<p><strong>Platform note.</strong> The Linux x64 AppImage is the exercised desktop package. Windows and macOS are not verified by this guide. A browser-rendered preview can show the interface, but native file access, media normalization, export, and other desktop operations require the native desktop runtime.</p>
+</blockquote>
+<p><strong><a href="user-guide.de.html">Deutsch: Deutsche Anleitung</a></strong></p>
+<h2 id="contents">Contents</h2>
+<ol>
+<li><a href="#1-overview">Overview</a></li>
+<li><a href="#2-installation-and-first-launch">Installation and first launch</a></li>
+<li><a href="#3-workspace-tour">Workspace tour</a></li>
+<li><a href="#4-project-lifecycle">Project lifecycle</a></li>
+<li><a href="#5-media-import-and-library">Media import and library</a></li>
+<li><a href="#6-timeline-editing">Timeline editing</a></li>
+<li><a href="#7-preview-and-audio">Preview and audio</a></li>
+<li><a href="#8-inspector-text-and-transitions">Inspector, text, and transitions</a></li>
+<li><a href="#9-transcription-and-captions">Transcription and captions</a></li>
+<li><a href="#10-pi-assistant-providers-and-permissions">Pi assistant, providers, and permissions</a></li>
+<li><a href="#11-export">Export</a></li>
+<li><a href="#12-keyboard-shortcuts">Keyboard shortcuts</a></li>
+<li><a href="#13-practical-end-to-end-tutorial">Practical end-to-end tutorial</a></li>
+<li><a href="#14-troubleshooting">Troubleshooting</a></li>
+<li><a href="#15-privacy-storage-and-portability">Privacy, storage, and portability</a></li>
+<li><a href="#16-limitations-and-glossary">Limitations and glossary</a></li>
+</ol>
+<h2 id="1-overview">1. Overview</h2>
+<p>Cutterhoochee combines a project document, a normalized media library, a frame-based timeline, a native preview/export renderer, local speech evidence, and an optional Pi-powered assistant. The normal working loop is:</p>
+<ol>
+<li>Create or open a <code>.cutproj</code> project.</li>
+<li>Import video, audio, or still images through the native file dialog (or drop files onto <strong>Drop media to import</strong>).</li>
+<li>Wait for each asset to finish media preparation.</li>
+<li>Add prepared assets to a video or audio track.</li>
+<li>Edit clips, titles, transitions, audio properties, and captions in the timeline and <strong>Inspector</strong>.</li>
+<li>Preview, search local transcript evidence if needed, and optionally ask Pi for an edit or inspection.</li>
+<li>Save, then export the selected revision to an MP4, optionally with an SRT caption sidecar.</li>
+</ol>
+<p>Cutterhoochee keeps the editable project and derived media separate from the original files. Importing creates managed normalized artifacts; it does not silently modify or delete the original path. The project stores references and identities so that a changed, moved, or replaced source can be detected rather than silently treated as the same media.</p>
+<h3 id="what-local-first-means-here">What “local-first” means here</h3>
+<ul>
+<li>The editor, project document, media normalization, preview renderer, waveform generation, and local Whisper transcription run in the desktop application.</li>
+<li>Local transcription keeps audio on the device. Assistant prompts and project-derived evidence use a separate, broader project-context consent described in Section 10; do not treat it as permission for only one clip.</li>
+<li>Pi is optional. You can perform the editing and use imported SRT captions without connecting an AI provider.</li>
+<li>The one-time speech-model download is a network action that requires its own consent. Downloading the model does not upload your media; transcription remains local.</li>
+<li>Provider credentials are entered by you. Never paste a key into a chat prompt.</li>
+</ul>
+<h3 id="captures-used-in-this-guide">Captures used in this guide</h3>
+<p>The screenshots below are documentation captures made with generated test-pattern footage and test audio, not with personal media. They demonstrate the visible UI and should not be read as claims about a hidden dialog or an unshown workflow.</p>
+<p><img loading="lazy" decoding="async" src="assets/workspace-dark.png" alt="Cutterhoochee dark workspace with Media library, Preview, Timeline, and Assistant panels. The visible media and color-bar footage are generated test-pattern content."></p>
+<p><em>Figure 1 — Dark workspace overview. The visible <code>red.mp4</code>, <code>english.wav</code>, <code>german.wav</code>, <code>blue.mp4</code>, <code>numbered.mp4</code>, <code>vfr.mp4</code>, <code>still.png</code>, and other names are test assets; the Assistant area contains a harmless proof interaction, not personal content.</em></p>
+<p><img loading="lazy" decoding="async" src="assets/workspace-light.png" alt="Cutterhoochee light workspace with the same editor areas and generated test-pattern media."></p>
+<p><em>Figure 2 — Light workspace overview. The capture shows the real full workspace after switching theme; the previewed color bars and frame counters are generated demonstration footage.</em></p>
+<p><img loading="lazy" decoding="async" src="assets/portrait-captions.png" alt="Portrait project preview with captions and generated test-pattern media."></p>
+<p><em>Figure 3 — Portrait workspace capture. It shows a <code>1080 × 1920</code> preview, the captions “Clear captions — Grüße.”, and the <strong>Software</strong> preview label. This is a generated test-pattern project, not a completed-transcript claim.</em></p>
+<p><img loading="lazy" decoding="async" src="assets/export-success.png" alt="Export video dialog after a successful generated-media export."></p>
+<p><em>Figure 4 — Completed export capture. The dialog visibly reports a finalized MP4 export, its captured revision, H.264/AAC and frame-rate metadata, 100% progress, and the optional SRT sidecar selection shown in that capture.</em></p>
+<h2 id="2-installation-and-first-launch">2. Installation and first launch</h2>
+<h3 id="21-install-the-exercised-linux-package">2.1 Install the exercised Linux package</h3>
+<ol>
+<li><p>Use the locally built Linux x64 AppImage at the path below, or the specific package supplied to you. This is a local build-output path, not a hosted download link.</p>
+</li>
+<li><p>Make the file executable using your file manager’s <strong>Properties</strong> dialog or a terminal command such as:</p>
+<pre><code class="language-sh">chmod +x src-tauri/target/release/bundle/appimage/Cutterhoochee_0.1.0_amd64.AppImage
+./src-tauri/target/release/bundle/appimage/Cutterhoochee_0.1.0_amd64.AppImage
+</code></pre>
+</li>
+<li><p>Launch the AppImage. If your desktop asks whether to execute the file, choose the execute/run option.</p>
+</li>
+<li><p>Keep the AppImage in a stable location. Moving the AppImage itself does not move a project, but a stable location makes future launches and desktop integration easier.</p>
+</li>
+<li><p>If your distribution blocks an untrusted download, use the distribution’s normal trust/permission workflow. Do not bypass a warning by running an unknown file as root.</p>
+</li>
+</ol>
+<p>If Linux reports a FUSE/mount problem, this package also supports temporary extraction:</p>
+<pre><code class="language-sh">./src-tauri/target/release/bundle/appimage/Cutterhoochee_0.1.0_amd64.AppImage --appimage-extract-and-run
+</code></pre>
+<p>This needs temporary disk space. It does not fix a damaged download or a graphics-driver issue. Do not run the editor as root. The manuals themselves can be opened offline with <code>xdg-open docs/index.html</code>.
+This guide does not assert a Windows or macOS installation procedure: those packages have not been exercised for this documentation.</p>
+<h3 id="22-check-the-first-launch-connection-badge">2.2 Check the first-launch connection badge</h3>
+<p>The start screen shows a badge in the top bar:</p>
+<ul>
+<li><strong>Desktop ready</strong> means the native bridge is available for the desktop operations described in this guide.</li>
+<li><strong>Browser preview · native required</strong> means the UI is running without the native bridge. You may inspect the interface, but native dialogs, imports, project persistence, normalized media, export, and native provider/permission operations are not available there.</li>
+</ul>
+<p>If the badge remains <strong>Browser preview · native required</strong> after launching the AppImage, close that window and start the actual AppImage rather than a browser development preview. A blank or missing native bridge is not fixed by retrying an import in the browser.</p>
+<h3 id="23-choose-a-project-format">2.3 Choose a project format</h3>
+<p>On the start screen, <strong>New project</strong> provides:</p>
+<ul>
+<li><strong>Project name</strong> — defaults to <code>Untitled project</code> if left empty.</li>
+<li><strong>Aspect</strong> — <strong>Landscape · 16:9</strong>, <strong>Portrait · 9:16</strong>, or <strong>Square · 1:1</strong>.</li>
+<li><strong>Frame rate</strong> — <strong>30 fps</strong> by default. Expand <strong>Advanced format options</strong> to choose <strong>24 fps</strong>, <strong>25 fps</strong>, or <strong>60 fps</strong>.</li>
+<li><strong>Create project</strong> — opens a native parent-folder chooser and creates <code>&lt;project-name&gt;.cutproj</code> inside the chosen folder.</li>
+</ul>
+<p>Choose the aspect and frame rate before importing. The native project profile supports exactly 16:9, 9:16, or 1:1 dimensions and 24/1, 25/1, 30/1, or 60/1 frame rates. A later source file is normalized into this profile; it does not change the project’s frame rate.</p>
+<h2 id="3-workspace-tour">3. Workspace tour</h2>
+<p>When a project is open, the editor has three main regions and a top bar.</p>
+<h3 id="31-top-bar">3.1 Top bar</h3>
+<p>From left to right, the top bar includes:</p>
+<ul>
+<li><strong>Toggle media pane</strong> — collapses or restores the left pane.</li>
+<li>The Cutterhoochee mark and project name button — the project name button opens another project location.</li>
+<li><strong>Saved locally</strong> or a current status notice — indicates the latest local save status.</li>
+<li><strong>Undo</strong> and <strong>Redo</strong> — project-history actions.</li>
+<li><strong>Export</strong> — opens <strong>Export video</strong> (also <code>Ctrl/Cmd+E</code>).</li>
+<li><strong>Toggle theme</strong> — switches between dark and light UI.</li>
+<li><strong>Provider settings</strong> — opens provider connections and model selection.</li>
+<li><strong>Close project</strong> — closes the open project and returns to the start screen.</li>
+</ul>
+<p>The save indicator is not a substitute for a backup. For important work, use <strong>Save</strong> and copy the project directory only after the save has completed.</p>
+<h3 id="32-left-pane-project-tools">3.2 Left pane: Project tools</h3>
+<p>The left pane has three tabs:</p>
+<ul>
+<li><strong>Media</strong> — imported assets, search, inspection, relinking, removal, and <strong>Add to timeline</strong>.</li>
+<li><strong>Transcript</strong> — choose a normalized audio source, <strong>Transcribe locally</strong>, <strong>Import SRT</strong>, search local transcript spans, and <strong>Apply captions</strong>.</li>
+<li><strong>Inspector</strong> — properties for the selected clip, title, or caption.</li>
+</ul>
+<p>The left pane can be collapsed. If it is hidden, use <strong>Toggle media pane</strong> to restore it.</p>
+<h3 id="33-center-preview">3.3 Center: Preview</h3>
+<p>The center preview displays the project render plan at the selected frame. Its header shows the project dimensions, readiness/transport state, current timecode, and duration. The bottom transport has <strong>Previous frame</strong>, <strong>Play</strong>/<strong>Pause</strong>, <strong>Next frame</strong>, a <strong>Preview playhead</strong> slider, a transport state such as <code>paused</code>, and a quality toggle labeled <strong>auto</strong> or <strong>software</strong>.</p>
+<details class="animation"><summary>Show GIF demonstration (silent)</summary><img loading="lazy" decoding="async" src="assets/playback.gif" alt="Animated Preview transport demonstration: play/pause and frame movement in the Preview controls."></details>
+<p><em>Figure 5 — <code>playback.gif</code> shows generated demonstration footage in the <strong>Preview</strong> transport. It is not a timeline clip-dragging tutorial and contains no user media.</em></p>
+<details class="animation"><summary>Show GIF demonstration (silent)</summary><img loading="lazy" decoding="async" src="assets/timeline-seek.gif" alt="Animated Preview playhead slider being scrubbed across generated demonstration footage."></details>
+<p><em>Figure 6 — <code>timeline-seek.gif</code> shows scrubbing the <strong>Preview playhead</strong> slider. It does not show editing or dragging a clip on the Timeline.</em></p>
+<h3 id="34-bottom-timeline">3.4 Bottom: Timeline</h3>
+<p>The timeline header says <strong>Edit</strong>, <strong>Timeline</strong>, and the current duration. It provides:</p>
+<ul>
+<li><strong>Split selected clip</strong> (scissors icon).</li>
+<li><strong>Add title</strong> (plus icon).</li>
+<li><strong>Snap</strong> toggle.</li>
+<li><strong>Timeline zoom</strong> slider.</li>
+</ul>
+<p>Below the ruler are track rows. A new project starts with <strong>Main Video</strong>, <strong>Main Audio</strong>, and <strong>Text</strong> tracks. Projects may also contain additional tracks (for example, an <strong>Overlay</strong> video track). Each track has mute and lock controls. The ruler also acts as a range-selection surface: click to put the playhead at a frame, or drag to select a range.</p>
+<h3 id="35-right-pane-assistant-chat">3.5 Right pane: Assistant chat</h3>
+<p>The right pane is <strong>Assistant chat</strong>. It can display assistant messages, tool cards, status, usage information, and <strong>tool updates</strong>. The composer is labeled <strong>Describe an edit…</strong>. <strong>Enter</strong> sends a prompt; <strong>Shift+Enter</strong> inserts a new line. If the assistant is running, <strong>Stop</strong> requests cancellation. <strong>New assistant session</strong> clears the conversation and starts a fresh Pi session.</p>
+<details class="animation"><summary>Show GIF demonstration (silent)</summary><img loading="lazy" decoding="async" src="assets/theme-switch.gif" alt="Animated full-workspace theme switch between dark and light."></details>
+<p><em>Figure 7 — <code>theme-switch.gif</code> shows the real full workspace alternating dark and light themes. It does not depict a project edit or provider login.</em></p>
+<h2 id="4-project-lifecycle">4. Project lifecycle</h2>
+<h3 id="41-create-a-project">4.1 Create a project</h3>
+<ol>
+<li>On the start screen, fill in <strong>Project name</strong>.</li>
+<li>Select <strong>Aspect</strong> and <strong>Frame rate</strong>. Use <strong>Advanced format options</strong> if you need 24, 25, or 60 fps.</li>
+<li>Click <strong>Create project</strong>.</li>
+<li>Choose the <strong>parent folder</strong> in the native dialog. Cutterhoochee creates <code>&lt;project-name&gt;.cutproj</code> inside it. Remember this full path for reopening and backup.</li>
+<li>Wait for the editor to load and confirm the top bar reports local saving.</li>
+</ol>
+<p>The initial document has revision <code>0</code>, an empty asset list, and the default video, audio, and text tracks. The project profile is immutable for the operations exposed by the current UI; choose the format carefully before building a timeline.</p>
+<h3 id="42-open-an-existing-project">4.2 Open an existing project</h3>
+<ol>
+<li>From the start screen, click <strong>Open project</strong> (or a name under <strong>Recent projects</strong>).</li>
+<li>Select the saved <code>.cutproj</code> directory, not an arbitrary media file.</li>
+<li>Wait for <strong>Opening project…</strong> to finish.</li>
+<li>Confirm that the expected project name, assets, and timeline appear.</li>
+</ol>
+<p><strong>Recent projects</strong> retains recent names, not dependable reopen paths. Clicking a recent name still opens the generic folder chooser. The list is updated by create/open/import workflows; it is not a backup or a way to discover a forgotten project path.</p>
+<p>A project is a directory containing <code>project.json</code> and app-managed media/artifact directories. The native store acquires a project lock; opening the same project concurrently is not a supported collaboration mode. Close the other editor instance before opening the directory again.</p>
+<h3 id="43-import-from-the-start-screen">4.3 Import from the start screen</h3>
+<p><strong>Import media</strong> on the start screen can create a project with the current start-screen format if none is open, then opens a native media chooser. You can also drag files onto <strong>Drop media to import</strong>. After import, the application returns to the project view and displays preparation status.</p>
+<h3 id="44-save-and-close">4.4 Save and close</h3>
+<ul>
+<li><strong>Ctrl/Cmd+S</strong> synchronizes the already-open project file and directory at their existing location. It is not a Save As command and does not choose a new destination.</li>
+<li>Editing operations are committed to the project document and written atomically. A successful local save does not mean an external backup exists.</li>
+<li>Click <strong>Close project</strong> only after saving work you want to keep. Closing retires the current native generation; pending work from the old project should not be reused in a new one.</li>
+<li>If a save reports that its outcome is unknown, follow the message and reopen the project before continuing. Do not overwrite the directory manually while the editor is still open.</li>
+</ul>
+<h3 id="45-undo-and-redo">4.5 Undo and redo</h3>
+<p>Every normal editor operation is committed with a label and participates in project history. Use <strong>Undo</strong> / <strong>Redo</strong> or the <a href="#12-keyboard-shortcuts">keyboard shortcuts</a>. History is revision-aware. If another native call has changed the project, Cutterhoochee refreshes the latest timeline and discards the stale gesture instead of applying it to a different revision.</p>
+<h2 id="5-media-import-and-library">5. Media import and library</h2>
+<h3 id="51-supported-import-families">5.1 Supported import families</h3>
+<p>The native probe accepts standalone local media from these demuxer families:</p>
+<ul>
+<li>Video/container families: MOV/MP4/M4V-style files, Matroska, WebM, AVI, MPEG-TS, MPEG, FLV, OGG/OGV, and related FFmpeg-supported standalone containers.</li>
+<li>Audio families: MP3, WAV, FLAC, AAC, OGG/Opus, and related standalone audio streams.</li>
+<li>Still-image families: PNG, JPEG, and WebP image sequences/files exposed as a still image.</li>
+</ul>
+<p>The visible start-screen drop hint names <strong>Video, audio, PNG, JPEG, or WebP</strong>. The native allowlist is the authority, so a filename extension alone does not guarantee import. Playlists and network media are explicitly rejected: HLS, DASH, concat/segment/playlist inputs, HTTP, RTSP, and similar network sources cannot be imported as a standalone asset.</p>
+<p>Do not import a directory, playlist, URL, or a file whose contents do not match its media metadata. Import is a native, permission-gated operation on an absolute local path.</p>
+<h3 id="52-import-through-media">5.2 Import through <strong>Media</strong></h3>
+<ol>
+<li>Open the <strong>Media</strong> tab.</li>
+<li>Click the folder button labeled <strong>Import media</strong>.</li>
+<li>In the native chooser, select one or more local files.</li>
+<li>Confirm the file permission request if shown.</li>
+<li>Wait while each item changes from <strong>Preparing normalized media…</strong> to a ready asset.</li>
+</ol>
+<p>You can also drag an asset card from the library onto a timeline track. Dragging creates a copy/reference clip in the timeline; it does not move or delete the managed asset.</p>
+<h3 id="53-understand-asset-cards">5.3 Understand asset cards</h3>
+<p>A ready asset card can show:</p>
+<ul>
+<li>The original filename.</li>
+<li><strong>Video</strong>, <strong>Audio</strong>, or <strong>Image</strong> type.</li>
+<li>Dimensions, duration, normalized audio format, source codec, and original byte size when known.</li>
+<li>A generated thumbnail for video/still content.</li>
+<li>A waveform when normalized audio is available.</li>
+<li>An <strong>Add to timeline</strong> button.</li>
+<li><strong>Inspect</strong> and the actions menu.</li>
+</ul>
+<p>During preparation, the card may say <strong>Preparing normalized media…</strong> or <strong>Media preparation is incomplete.</strong> A thumbnail may separately say <strong>Generating thumbnail…</strong> or <strong>Thumbnail unavailable.</strong> These statuses are not interchangeable: an asset can be normalized while its optional display thumbnail is still being generated.</p>
+<p>The normalizer creates a master video and a same-frame-count proxy for video, and converts audio to application-owned 48 kHz stereo PCM. A still image becomes a one-frame normalized video source. Video input is converted to the selected project frame rate, so edit decisions are made against project frames rather than an original variable-frame-rate clock.</p>
+<h3 id="54-add-media-to-the-timeline">5.4 Add media to the timeline</h3>
+<ul>
+<li>Select a ready library card and click <strong>Add to timeline</strong>. For video or still-image assets, this appends a clip to the end of the first video track. For audio assets, it inserts the clip at frame 0 and caps its duration to the existing timeline duration when one exists; it does not use the current playhead.</li>
+<li>Or drag the card onto a specific compatible track and frame position when you need explicit placement.</li>
+<li>Video assets belong on video tracks; audio assets belong on audio tracks. The UI rejects or warns when no compatible track exists.</li>
+<li>If the asset is not ready, wait for normalization. <strong>Relink</strong> is offered only when the normalized asset/managed artifact is unavailable or incomplete; it is not a general “refresh” button.</li>
+</ul>
+<h3 id="55-inspect-relink-and-remove">5.5 Inspect, relink, and remove</h3>
+<ul>
+<li><strong>Inspect</strong> runs the native media inspection action and refreshes the library. It does not open a detailed identity/properties viewer in the current UI.</li>
+<li><strong>Relink</strong> is available when the project needs the original again to recover missing/incomplete normalized media. Select the intended replacement path in the native chooser and verify the resulting asset yourself; do not assume relink compares the replacement with the old content hash or that it is a safe way to swap media silently.</li>
+<li><strong>Remove</strong> removes the asset from the project library. The asset’s clips must be removed first; the native operation refuses to remove media still referenced by clips. Removing an imported asset does not delete the original file from its source location.</li>
+</ul>
+<p><strong>Caution:</strong> Removing a clip and removing its library asset are different operations. If you only want to take a shot out of the edit, select the clip and use <strong>Remove clip</strong> or <code>Delete</code>; do not remove the library asset unless you intend to remove the project’s reference and derived media.</p>
+<h3 id="56-missing-media-recovery">5.6 Missing media recovery</h3>
+<p>An original path can move or disappear after import without making a complete managed project unusable. If the <code>.cutproj</code> copy still contains the normalized masters/PCM and other referenced artifacts, the project remains editable, playable, and exportable; the original path is metadata, not a requirement for every later operation. The library shows <strong>Relink</strong> only when a normalized asset or managed artifact is missing/incomplete and native preparation needs a source again. In that case, choose the intended replacement file, wait for normalization, and review the refreshed asset and timeline. Do not edit <code>project.json</code> by hand to change a path.</p>
+<h2 id="6-timeline-editing">6. Timeline editing</h2>
+<h3 id="61-work-in-frames-not-guessed-milliseconds">6.1 Work in frames, not guessed milliseconds</h3>
+<p>The timeline ruler and Inspector timing values are integer project frames. Timecode is displayed using the project’s selected frame rate. At 30 fps, for example, 30 frames represent one second; at 24 fps, 24 frames represent one second. The accepted project rates are 24, 25, 30, and 60 fps.</p>
+<p>Imported VFR media is normalized into the project frame grid. The normalized master and proxy have the same frame count, and all later clip timing, captions, transitions, preview, and export use those project frames. This prevents a later preview/export pass from silently switching back to original VFR timestamps.</p>
+<h3 id="62-select-a-clip-text-item-or-range">6.2 Select a clip, text item, or range</h3>
+<ul>
+<li>Click a clip to select it and move the playhead to its start.</li>
+<li>Shift-click clips or text items to add/remove them from the selection.</li>
+<li>Click the ruler to move the playhead.</li>
+<li>Drag across the ruler to create a selected range. The range has <code>startFrame</code> and <code>endFrame</code>; the end is exclusive.</li>
+<li>Clicking a blank timeline area moves the playhead without selecting a clip.</li>
+</ul>
+<p>Selection is persisted as timeline state, but it is not a content edit. Moving the playhead does not create an undo entry.</p>
+<h3 id="63-move-a-clip">6.3 Move a clip</h3>
+<ol>
+<li>Press and hold the primary mouse button on the clip body.</li>
+<li>Drag horizontally within its existing track.</li>
+<li>Release at the desired position.</li>
+<li>With <strong>Snap</strong> enabled, the release position snaps to frame <code>0</code>, the playhead, and nearby clip starts/ends within the snap threshold.</li>
+<li>With <strong>Snap</strong> disabled, the clip remains at the nearest whole frame represented by the pointer.</li>
+</ol>
+<p>Moving a clip removes an explicit dissolve involving that clip before committing the move, because the transition graph must continue to describe an exact overlap. If captions belong to a moved clip, the native editor moves their projected timing with that clip and respects the lock state of the caption track.</p>
+<p>There is no drag-to-another-track operation in the current clip pointer handler; use the supported track/operation controls rather than assuming a cross-track drag will change a clip’s track.</p>
+<h3 id="64-split-a-clip">6.4 Split a clip</h3>
+<ol>
+<li>Select the clip.</li>
+<li>Put the playhead strictly inside its interval (not on its first or last frame).</li>
+<li>Click the scissors button (<strong>Split selected clip</strong>), use the clip context menu’s <strong>Split at playhead</strong>, or press <code>S</code> with no modifier.</li>
+<li>Confirm the two resulting pieces in the timeline and Inspector.</li>
+</ol>
+<p>A split preserves the source-frame partition. Captions owned by the clip are partitioned in source space, and fades are bounded to the new pieces. You cannot split a locked-track clip. You also cannot split inside or at the boundary of an explicit dissolve; remove the dissolve first, split, and add a new dissolve only if the resulting clips meet the transition rules.</p>
+<p>If Cutterhoochee says <strong>Place the playhead inside the selected clip to split it</strong>, move the playhead before trying again. If it says to remove a dissolve first, do exactly that instead of repeatedly retrying.</p>
+<h3 id="65-remove-clips-and-remove-a-range">6.5 Remove clips and remove a range</h3>
+<ul>
+<li>Select one or more clips and press <code>Delete</code>, or right-click a clip and choose <strong>Remove clip</strong>.</li>
+<li>To remove a time span, drag a range on the ruler, hold <code>Shift</code>, and press <code>Delete</code>. The current UI commits <strong>Remove range</strong> with ripple enabled.</li>
+<li>Removing a range can split or shorten clips, shift later clips and standalone text, and project source-owned captions to the retained segments.</li>
+</ul>
+<p>Range removal is destructive to the edit’s timing even though it is undoable. Before using it, check the range start/end frames and save a revision you can return to. Locked tracks can block a range edit when a clip, text item, or owned caption on that track would need to change.</p>
+<h3 id="66-mute-and-lock-tracks">6.6 Mute and lock tracks</h3>
+<p>Each track row has two icon buttons:</p>
+<ul>
+<li><strong>Mute</strong>/<strong>Unmute</strong> changes the stored track status. <strong>Current limitation: the render plan does not use this status, so it must not be relied on to silence preview or exported audio.</strong></li>
+<li><strong>Lock</strong>/<strong>Unlock</strong> prevents timing/content edits that would touch the track.</li>
+</ul>
+<p>Use <strong>Lock</strong> before inspecting a multi-track section to avoid moving it accidentally. A locked track is an editing constraint, not a permanent protection boundary: unlock it only when you intentionally need to edit it.</p>
+<h3 id="67-zoom-and-navigation">6.7 Zoom and navigation</h3>
+<p>Use the <strong>Timeline zoom</strong> range control to change the number of pixels per frame. The control is bounded; zooming does not change timing. Scroll the timeline horizontally to reach later frames and vertically when the project has many tracks. The zoom implementation keeps the playhead near its current viewport position when possible.</p>
+<h2 id="7-preview-and-audio">7. Preview and audio</h2>
+<h3 id="71-preview-transport">7.1 Preview transport</h3>
+<p>The preview is generated from the current native render plan. Use:</p>
+<ul>
+<li><strong>Previous frame</strong> and <strong>Next frame</strong> for exact one-frame movement.</li>
+<li><strong>Play</strong>/<strong>Pause</strong> for transport.</li>
+<li>The <strong>Preview playhead</strong> slider for direct seeking.</li>
+<li>The timecode readout to identify the current project frame.</li>
+</ul>
+<p>A playhead change while paused is saved as timeline selection state. Seeking while playing stops the old scheduled buffers and resumes from the new anchor when enough data is available.</p>
+<details class="animation"><summary>Show GIF demonstration (silent)</summary><img loading="lazy" decoding="async" src="assets/playback.gif" alt="Preview transport control demonstration with generated footage."></details>
+<p><em>Figure 8 — The GIF repeats a Preview play/pause/frame transport action; it does not demonstrate timeline clip editing.</em></p>
+<h3 id="72-preview-quality-and-software-fallback">7.2 Preview quality and software fallback</h3>
+<p>The preview quality button toggles between <strong>auto</strong> and <strong>software</strong>. <strong>Auto</strong> uses the normal native/browser decoder path where available. <strong>Software</strong> requests the bounded software preview path, which is useful when hardware/browser video decoding cannot display a source. Software preview is a lower-resolution preview path (the renderer bounds its preview canvas rather than promising export resolution); it is not an export-quality setting.</p>
+<p>The corner label reports the project dimensions and either <strong>Auto</strong> or <strong>Software</strong>. A <code>buffering</code> overlay means the engine is obtaining the required frame/audio window. An error overlay offers <strong>Retry preview</strong>. If video decoding remains unavailable, use <strong>Software</strong>, retry after normalization, and inspect the notice for a source-specific error. Do not infer that a successful software preview means the source is accepted by every external player.</p>
+<h3 id="73-audio-clock-and-waveform">7.3 Audio clock and waveform</h3>
+<p>Application audio is normalized to 48 kHz, stereo PCM and scheduled on the native project sample grid. Browser/device output may use a different hardware rate, but project sample coordinates remain 48 kHz. The timeline waveform is a bounded peak summary of normalized PCM; it is a visual aid, not an audio export substitute.</p>
+<p>The preview’s volume icon is an indicator, not a user volume slider. Change clip level using <strong>Gain · dB</strong> in <strong>Inspector</strong>. Clearing <strong>Clip audio</strong> excludes audio from a <strong>video-track clip</strong>. The current render plan ignores track <strong>Mute</strong> and does not exclude audio-track clips when their <strong>Clip audio</strong> checkbox is cleared. Do not use those ineffective states as a guarantee of silence. If unwanted audio must be excluded, remove its audio-track clip from a deliberately backed-up working copy and inspect the final export.</p>
+<h3 id="74-audio-gaps-and-mixed-tracks">7.4 Audio gaps and mixed tracks</h3>
+<p>The render plan includes audio segments and intentional silence where no enabled clip contributes. Video-only assets can therefore play without an audio stream, while export still produces an audio stream for the final MP4. If audio is missing, check:</p>
+<ol>
+<li>The clip has normalized audio (an audio waveform can be generated).</li>
+<li>For a video-track clip, <strong>Clip audio</strong> is enabled if its sound is wanted.</li>
+<li>Do not use track <strong>Mute</strong> or an audio-track clip’s <strong>Clip audio</strong> checkbox to infer what the current renderer will play.</li>
+<li><strong>Gain · dB</strong> is not set below the audible range.</li>
+<li>The playhead is inside the clip’s timeline interval.</li>
+</ol>
+<h2 id="8-inspector-text-and-transitions">8. Inspector, text, and transitions</h2>
+<h3 id="81-open-the-inspector">8.1 Open the Inspector</h3>
+<p>Select a media clip or text item, then choose the <strong>Inspector</strong> tab. With nothing selected, the panel says <strong>Nothing selected</strong> and instructs you to select a clip, title, or caption.</p>
+<p><img loading="lazy" decoding="async" src="assets/clip-inspector.png" alt="Inspector tab with a selected video clip and timing, canvas, audio, and transition fields."></p>
+<p><em>Figure 9 — <strong>Inspector</strong> capture for the selected generated <code>long-numbered.mp4</code> clip. Only the fields visible in the capture are described here; the test-pattern media is not user footage.</em></p>
+<h3 id="82-clip-timing">8.2 Clip timing</h3>
+<p>For a selected media clip, <strong>Timing</strong> contains:</p>
+<ul>
+<li><strong>Start</strong> — project start frame.</li>
+<li><strong>Source in</strong> — source frame used as the first frame.</li>
+<li><strong>Duration</strong> — retained duration in project frames.</li>
+<li><strong>Apply timing</strong> — validates and commits the three values.</li>
+</ul>
+<p>Values must be non-negative whole frames, and <strong>Duration</strong> must be positive. The native operation validates the source range, project range, track, and any transition relationship. If a timing change would invalidate an explicit dissolve, the UI removes the existing dissolve in the same edit before applying the trim; review the result rather than assuming the dissolve remains.</p>
+<p><strong>Destructive-edit caution:</strong> Applying timing can remove source content or change which source frames captions refer to. Use <strong>Undo</strong> immediately if the resulting preview is not what you intended.</p>
+<h3 id="83-canvas-and-visual-properties">8.3 Canvas and visual properties</h3>
+<p>The <strong>Canvas</strong> section provides:</p>
+<ul>
+<li><strong>Fit</strong> — <strong>Contain</strong> or <strong>Cover</strong>.</li>
+<li><strong>X · bp</strong> and <strong>Y · bp</strong> — base-point positions from <code>0</code> to <code>10000</code>; <code>5000</code> is the centered coordinate.</li>
+<li><strong>Scale · bp</strong> — scale in base points from <code>100</code> to <code>40000</code>; <code>10000</code> represents 100%.</li>
+<li><strong>Opacity · bp</strong> — opacity from <code>0</code> to <code>10000</code>.</li>
+</ul>
+<p>The values are normalized project coordinates rather than CSS pixels. Use small deliberate changes and confirm the canvas after each blur/commit. A field can commit on blur, while <strong>Apply timing</strong> commits the timing group explicitly.</p>
+<h3 id="84-clip-audio-properties">8.4 Clip audio properties</h3>
+<p>The <strong>Audio</strong> section provides:</p>
+<ul>
+<li><strong>Clip audio</strong> checkbox. It excludes audio from video-track clips; it currently does not exclude audio-track clips from the render plan.</li>
+<li><strong>Gain · dB</strong>, bounded by the current native validation range (the control exposes a practical range of <code>-60</code> to <code>12</code> dB and accepts decimal steps).</li>
+<li><strong>Fade in</strong> and <strong>Fade out</strong> in whole frames.</li>
+</ul>
+<p>Fades are frame-based and are clamped when a clip is split or shortened. If an audio change appears not to apply, leave the field to trigger its blur commit, then refresh the preview.</p>
+<h3 id="85-titles">8.5 Titles</h3>
+<p>Click <strong>Add title</strong> in the timeline toolbar to create a title on the text track at the current playhead. The default title is <code>Your title</code>, uses the <strong>Clean</strong> style, and lasts approximately three project seconds (rounded to whole frames). A text track is required; if none exists, the UI reports <strong>Add a text track before creating a title.</strong></p>
+<p>Select the title block on the text track and edit it in <strong>Inspector</strong>. The text inspector provides:</p>
+<ul>
+<li><strong>Text</strong> textarea (committed when it loses focus).</li>
+<li><strong>Style</strong> selector, including <strong>Clean</strong> and <strong>Boxed</strong>.</li>
+<li><strong>Size</strong> and position values (base-point coordinates).</li>
+<li><strong>Remove title</strong> for a title, or <strong>Remove caption</strong> for a caption.</li>
+</ul>
+<p>Titles are editable text items in the project document. They are rasterized with the app’s bundled font during preview/export; do not expect a font installed only on your machine to change the rendered title.</p>
+<h3 id="86-captions-and-text-items">8.6 Captions and text items</h3>
+<p>Caption items are also editable text items, shown on the text track with a <code>CC</code> marker. Select a caption to edit its text/style and placement in <strong>Inspector</strong>. Caption timing may be owned by a source clip; moving, splitting, trimming, or removing that clip projects the owned caption range with the retained source interval. Keep the text track unlocked for operations that need to move or split those captions. Editing a caption changes the editable project item, not the transcript evidence; it does not rewrite the stored transcript. The current UI has no direct drag/timing control for text or captions.</p>
+<h3 id="87-dissolves">8.7 Dissolves</h3>
+<p>A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:</p>
+<ol>
+<li>Select the left clip.</li>
+<li>Confirm that a next clip exists on the same video track and will follow it.</li>
+<li>In <strong>Inspector</strong>, open <strong>Transitions</strong>.</li>
+<li>Enter <strong>Frames</strong>. The duration must be at least 2 frames and shorter than both clips.</li>
+<li>Click <strong>Dissolve next</strong>.</li>
+</ol>
+<p>The two clips overlap by exactly the transition duration after the operation. The transition row shows <code>Dissolve · Nf</code>. Use <strong>Remove dissolve</strong> in the row or clip context menu to remove it.</p>
+<p>Dissolves are not supported on audio/text tracks. You cannot split inside the dissolve overlap, and moving/trimming a transition clip removes the dissolve first. If you need a different cut, remove the dissolve, make the edit, and add a new transition at the valid boundary.</p>
+<h2 id="9-transcription-and-captions">9. Transcription and captions</h2>
+<h3 id="91-choose-a-normalized-source">9.1 Choose a normalized source</h3>
+<p>Open the <strong>Transcript</strong> tab. The <strong>Audio/video source</strong> selector lists video and audio assets that have normalized audio. If the list is empty, the panel says <strong>No normalized audio source</strong>. Import a source with an audio stream and wait for preparation before trying again.</p>
+<p><img loading="lazy" decoding="async" src="assets/transcript-panel.png" alt="Transcript panel showing source selection and local transcription controls before results exist."></p>
+<p><em>Figure 10 — Initial <strong>Transcript</strong> capture. It shows the source selector, <strong>Transcribe locally</strong>, <strong>Import SRT</strong>, and search controls; it is not a completed transcript and does not show transcript results.</em></p>
+<h3 id="92-first-use-local-model-consent">9.2 First-use local model consent</h3>
+<p>Click <strong>Transcribe locally</strong>. Before a first transcription, Cutterhoochee may show <strong>Download local speech model?</strong>. Review the displayed:</p>
+<ul>
+<li><strong>File</strong></li>
+<li><strong>Download size</strong></li>
+<li><strong>Source</strong></li>
+<li><strong>Revision</strong></li>
+<li><strong>SHA-256</strong></li>
+<li><strong>Network/use</strong> statement</li>
+</ul>
+<p>The current native-pinned model is a multilingual Whisper model (<code>ggml-small.bin</code>, approximately 465 MiB/487,601,967 bytes as reported by native metadata). The one-time model download goes to app-owned storage. Click <strong>Download and transcribe</strong> only if you consent to that network download; click <strong>Not now</strong> to decline. Declining leaves manual editing and SRT import available.</p>
+<p>The model consent is action-specific and is not persisted in the project document. A model already present and verified in app storage can be reused without downloading it again. If model verification fails, remove no files blindly; re-open the panel, review the native status, and use the displayed source/revision/hash to diagnose the local model.</p>
+<h3 id="93-generate-and-review-a-transcript">9.3 Generate and review a transcript</h3>
+<ol>
+<li>Select the source in <strong>Audio/video source</strong>.</li>
+<li>Click <strong>Transcribe locally</strong>.</li>
+<li>If prompted, review <strong>Download local speech model?</strong> and choose <strong>Download and transcribe</strong> or <strong>Not now</strong>.</li>
+<li>Wait for <strong>Transcribing…</strong> to finish.</li>
+<li>Review the returned spans. The panel reports a transcript identifier and a count such as <code>Transcript ready with N spans</code>.</li>
+</ol>
+<p>Transcription consumes the normalized 48 kHz stereo PCM for the selected asset. It is local to the desktop runtime; it does not send video or audio to the configured AI provider. Timing is projected into project frames and may be marked <code>approx.</code> when the native transcript span is approximate. Treat generated text and timing as evidence to review, not as a guaranteed verbatim or legally authoritative record.</p>
+<p>The transcript is stored as an app-managed transcript artifact outside <code>project.json</code>, while the project document can refer to it through caption items. The artifact is tied to the source content identity and source frame range. Replacing/relinking a source changes the identity and requires fresh evidence.</p>
+<h3 id="94-search-a-transcript">9.4 Search a transcript</h3>
+<p>Enter a phrase in <strong>Find a phrase</strong> and press Enter or click the search arrow. Results show source frame ranges and text; an <code>approx.</code> marker identifies approximate timing. Click a result to seek to the matching placed clip. The source must be selected in <strong>Audio/video source</strong>, and a placed clip must contain the source range. If no matching clip is placed, the panel reports that no placed clip contains the range rather than seeking to an unrelated location.</p>
+<p>To search a hit belonging to another asset, switch <strong>Audio/video source</strong> first. Switching sources clears the current transcript ID and hits to prevent mixing evidence across files.</p>
+<h3 id="95-apply-captions">9.5 Apply captions</h3>
+<ol>
+<li>Select the transcript source in <strong>Audio/video source</strong>.</li>
+<li>Select a video or audio clip in the timeline whose <code>assetId</code> is that same source.</li>
+<li>Ensure the transcript identifier shown in the panel belongs to the current source.</li>
+<li>Click <strong>Apply captions</strong>.</li>
+<li>Review the caption blocks on the text track and the rendered preview.</li>
+</ol>
+<p>Cutterhoochee applies the transcript spans as new editable caption items with the <code>boxed</code> caption style. The operation first removes all existing captions owned by the selected clip, including manual wording, style, placement, and layout edits, then recreates captions from the transcript spans that overlap the clip source range. The operation requires a selected clip from the current source; it will not apply a transcript to an unrelated clip. Captions are placed according to source intervals projected through the clip’s <code>Source in</code> and timeline position.</p>
+<p>Applying captions is an edit and is undoable, but it can create many text items. Save before applying if you need an easy rollback point. Edit wording, style, placement, or other visible properties in <strong>Inspector</strong> after selecting a caption block. Those edits change the caption item only; they do not edit the underlying transcript evidence.</p>
+<h3 id="96-import-an-srt-instead">9.6 Import an SRT instead</h3>
+<p>Click <strong>Import SRT</strong>. The native file chooser requests an SRT file and imports its cues as editable caption items at the current playhead. SRT import does not require the Whisper model or a provider connection. The imported cues are not automatically a transcript identifier, so <strong>Apply captions</strong> is not the path for SRT cues; review and edit the caption items directly on the text track.</p>
+<p>The current UI has no text/caption timing drag control. If SRT cues are imported at the wrong playhead, use <strong>Undo</strong>, seek to the intended playhead, and import the SRT again. The SRT parser validates cue order and frame conversion against the project profile. If cues overlap, are malformed, outside the usable range, or use unsupported timing, correct the SRT externally and import a clean copy. Do not assume every subtitle dialect or styling extension is preserved.</p>
+<p>SRT input must be one UTF-8 file, no larger than 5 MiB, with nonempty cues and increasing, non-overlapping positive time intervals. Cue starts are rounded down and ends up to project frames; a very short positive cue can become one frame. A minimal example, saved as a plain UTF-8 <code>.srt</code> file, is:</p>
+<pre><code class="language-srt">1
+00:00:00,000 --&gt; 00:00:02,000
+Welcome to Cutterhoochee.
+
+2
+00:00:02,000 --&gt; 00:00:04,000
+Let us begin.
+</code></pre>
+<p>Set <strong>Preview playhead</strong> to frame 0 before importing this example if its first caption should start at the beginning of the timeline.</p>
+<h2 id="10-pi-assistant-providers-and-permissions">10. Pi assistant, providers, and permissions</h2>
+<h3 id="101-what-pi-can-and-cannot-do">10.1 What Pi can and cannot do</h3>
+<p>The right pane is an optional Pi assistant session. The assistant can request editor operations, inspect project-local evidence, and use permission-gated external tools when the provider/runtime supports the requested operation. Ordinary manual editing remains available when Pi or its provider is unavailable.</p>
+<p>Pi does not make an external provider trustworthy by itself. A prompt is an instruction to an agent; it is not a commit preview or a substitute for reviewing the resulting revision. Inspect the timeline, preview, notices, and history after every assistant edit.</p>
+<p>The app’s prompt examples are:</p>
+<ul>
+<li><code>Remove the first two seconds</code></li>
+<li><code>Add captions</code></li>
+<li><code>Make this vertical</code></li>
+</ul>
+<p>More precise prompts are safer and easier to verify. For example:</p>
+<ul>
+<li><code>On Main Video, remove the range from frame 0 through frame 60, ripple later clips, and do not touch Main Audio.</code></li>
+<li><code>Find the phrase “setup explanation” in the selected source and report the matching frame range; do not edit.</code></li>
+<li><code>Add captions from the transcript for the selected red.mp4 clip, then stop so I can review them.</code></li>
+<li><code>Set the selected clip to Contain, keep its audio disabled, and do not add a transition.</code></li>
+</ul>
+<p>If you want an operation without AI, use the manual controls described in Sections 5–9. Do not ask Pi to invent a file path, provider model, codec, or shortcut that is not visible in the current build.</p>
+<h3 id="102-start-stop-and-restart-a-session">10.2 Start, stop, and restart a session</h3>
+<ol>
+<li>Open <strong>Provider settings</strong> and connect/select a provider and model (see below).</li>
+<li>Return to <strong>Assistant chat</strong>.</li>
+<li>Type into <strong>Describe an edit…</strong>.</li>
+<li>Press Enter to send, or Shift+Enter for a multi-line prompt.</li>
+<li>Watch assistant text and tool cards. Expand a tool card to inspect its details.</li>
+<li>If the run is unsafe, too broad, or simply no longer wanted, click <strong>Stop</strong>.</li>
+<li>If the conversation has become confusing, click <strong>New assistant session</strong>. This clears the assistant history for the current project scope; it does not undo committed editor changes.</li>
+</ol>
+<p>The chat shows <strong>tool updates</strong>, tool status, and failures. A failed tool is not evidence that a partial edit did or did not occur; refresh the project and inspect the actual revision before retrying.</p>
+<h3 id="103-provider-settings">10.3 Provider settings</h3>
+<p>Click the key icon in the chat intent or <strong>Provider settings</strong> in the top bar. The dialog contains:</p>
+<ul>
+<li><strong>Connections</strong> list and <strong>Refresh providers</strong>.</li>
+<li>Provider connection state such as <strong>Not connected</strong>, auth type, and model count.</li>
+<li><strong>Authentication</strong> selector with <strong>API key</strong> or <strong>OAuth sign-in</strong> where supported.</li>
+<li><strong>API key</strong> input, shown only for API-key providers.</li>
+<li><strong>Session-only credential</strong> checkbox.</li>
+<li><strong>Connect</strong>, <strong>Refresh connection</strong>, or <strong>Disconnect</strong>.</li>
+<li>The <strong>Model</strong> selector, populated only with models reported by the connected provider.</li>
+</ul>
+<p><img loading="lazy" decoding="async" src="assets/provider-settings.png" alt="Provider settings showing a blank API-key field and provider/model connection statuses."></p>
+<p><em>Figure 11 — <strong>Provider settings</strong> capture. The <code>API key</code> field is blank and shows the placeholder <code>Paste a key for this session</code>; no credential or account PII is visible. It shows a connected OpenAI Codex subscription entry and unconnected API-key providers in that particular demonstration state.</em></p>
+<p>Only a connected provider’s declared models appear. A model marked with image evidence is one the provider declared capable of image input; do not infer native video input from that label. If a model does not appear, click <strong>Refresh providers</strong> and <strong>Refresh connection</strong>, then confirm the provider’s authentication state.</p>
+<h3 id="104-credentials">10.4 Credentials</h3>
+<p>Credentials are user-entered and must not be copied into prompts, screenshots, issue reports, or project files.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Supported connection</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Anthropic</strong></td>
+<td>API key</td>
+</tr>
+<tr>
+<td><strong>OpenAI</strong></td>
+<td>API key</td>
+</tr>
+<tr>
+<td><strong>OpenAI Codex</strong></td>
+<td>Its separate OAuth/PKCE subscription flow</td>
+</tr>
+</tbody></table></div>
+<p>The underlying SDK may know other providers, but this app does not expose them as supported connections. Selecting an unsupported authentication combination does not make it available.</p>
+<ul>
+<li>For an API-key provider, select <strong>API key</strong>, paste the key into <strong>API key</strong>, and click <strong>Connect</strong>.</li>
+<li>For OAuth, select <strong>OAuth sign-in</strong> where the provider exposes it, follow the native prompt, and complete the provider’s HTTPS flow. Authorization codes do not enter chat.</li>
+<li>For OpenAI Codex, the UI uses its separate OAuth/PKCE subscription flow. It is not an OpenAI API-key alias; do not paste an OpenAI API key into the Codex connection.</li>
+<li>If the operating-system keyring/credential store is unavailable, enable <strong>Session-only credential</strong> and retry. In that mode the credential remains in native memory only for the session and is not persisted by the app.</li>
+<li>Click <strong>Disconnect</strong> to remove the configured connection from the provider runtime. Verify the provider status after disconnecting.</li>
+</ul>
+<p>The exact provider availability and model catalog are runtime/provider facts. This guide does not promise that a named cloud provider, model, region, quota, or image capability will be available in every installation.</p>
+<h3 id="105-evidence-consent">10.5 Evidence consent</h3>
+<p>Every assistant prompt—including a project-status question or edit-only instruction—requires the project evidence grant <strong>before the prompt is run</strong>. If the grant is missing, Cutterhoochee shows <strong>Share project evidence?</strong> with:</p>
+<ul>
+<li>Provider and account identity.</li>
+<li>Project/workspace scope.</li>
+<li>A description that sampled frames and transcript spans may be sent.</li>
+<li><strong>Deny</strong>.</li>
+<li><strong>Allow evidence</strong>.</li>
+</ul>
+<p>Review the provider/account and project scope before allowing. <strong>Deny</strong> keeps the evidence local. <strong>Allow evidence</strong> creates/uses a broader grant for managed frame and transcript evidence in the displayed workspace/project/provider/account context; it is not limited to one asset, one range, or one prompt, and subsequent in-scope evidence may not ask again. It is not blanket permission to upload every project file or original, but you should treat it as permission for future managed-evidence requests in that scoped context. Do not allow evidence for a provider you did not intend to use.</p>
+<p>The grant is persisted in app-owned permission storage; the dialog does not show or approve a complete list of individual assets/time ranges. There is no dedicated evidence-revoke switch in the current UI. Use <strong>Close project</strong> within the running app to retire the active project context and revoke its grants; reopening then requires approval again. <strong>Do not rely on restarting the app to revoke consent</strong>, because matching persisted permission state can be loaded again. <strong>Stop</strong> cancels a run but is not a consent-revoke command. Once authorized, your typed chat messages are sent to the connected provider too.</p>
+<p>Evidence consent is distinct from the local speech-model download consent and from file/system-operation approvals. You may approve one and deny another.</p>
+<h3 id="106-native-permission-requests">10.6 Native permission requests</h3>
+<p>When an assistant or external operation needs authority, the UI shows <strong>Permission required</strong>. Review the exact details before choosing <strong>Allow once</strong> or <strong>Deny</strong>:</p>
+<ul>
+<li><strong>Operation</strong> (for example, system execution or an external operation).</li>
+<li><strong>Executable</strong>, exact <strong>Arguments</strong>, and <strong>Working directory</strong> for a command.</li>
+<li><strong>Paths</strong> or <strong>Target identity</strong> for file access.</li>
+<li><strong>Destination</strong>, HTTP method/URL, body size/hash, or read range when relevant.</li>
+<li><strong>Timeout</strong> and whether it will <strong>Overwrite existing target</strong>.</li>
+<li>The project/generation and <strong>Assistant run</strong> scope.</li>
+</ul>
+<p>The dialog warns that the working directory is not a sandbox and that completed effects are not reversed by Timeline Undo. <strong>Deny</strong> cancels that request. <strong>Allow once</strong> authorizes the exact native operation shown, not an unbounded future command. Never approve an unfamiliar executable, a path outside your intended work area, a destructive overwrite, or a network destination you have not verified.</p>
+<p>File grants, external evidence grants, system reads/writes/executes, HTTP calls, and export destinations are enforced by the native runtime and scoped to the current app workspace/project generation. If the project changes while a prompt is pending, the request may be rejected as stale; send a new prompt only after reviewing the new scope.</p>
+<h2 id="11-export">11. Export</h2>
+<h3 id="111-capture-a-deliberate-revision">11.1 Capture a deliberate revision</h3>
+<p>Before exporting:</p>
+<ol>
+<li>Save the project with <strong>Ctrl/Cmd+S</strong>.</li>
+<li>Review the current revision number in the top bar/status and inspect the complete timeline and preview.</li>
+<li>Confirm that all assets are normalized and no card says <strong>Media preparation is incomplete.</strong></li>
+<li>Check captions, actual audio output, clip gain/fades, and transition overlaps. Do not rely on track <strong>Mute</strong> or an audio-track clip’s <strong>Clip audio</strong> state to silence output in the current build.</li>
+<li>Click <strong>Export</strong> or press <code>Ctrl/Cmd+E</code>.</li>
+</ol>
+<p>The <strong>Export video</strong> dialog captures the selected current revision. Its message explicitly says the export will not change if you continue editing. Edits made after export starts do not mutate the captured render plan; they become a later project revision.</p>
+<h3 id="112-choose-resolution-and-sidecar">11.2 Choose resolution and sidecar</h3>
+<p>The dialog offers:</p>
+<ul>
+<li><strong>Resolution</strong>: <code>720p</code> or <code>1080p</code>.</li>
+<li><strong>SRT caption sidecar</strong> checkbox.</li>
+<li><strong>Export</strong> action inside the <strong>Export video</strong> dialog.</li>
+</ul>
+<p>The width/height follows the project aspect. For a landscape project, 720p/1080p produce 16:9 dimensions; for portrait they produce 9:16; for square they remain square. The dialog displays the resulting dimensions and <code>H.264 / AAC</code> at the project frame rate. The native export surface is bounded to these 720/1080 choices; it does not accept arbitrary output dimensions.</p>
+<p>If <strong>SRT caption sidecar</strong> is selected, Cutterhoochee writes an <code>.srt</code> beside the MP4 using the same base filename; no second file chooser is used. It requires its own write/overwrite permission. The sidecar contains projected timeline captions, not ordinary title items; it is additional to captions already rendered into the video pixels.</p>
+<h3 id="113-choose-a-safe-destination">11.3 Choose a safe destination</h3>
+<p>Click <strong>Export</strong> inside the <strong>Export video</strong> dialog and choose a destination in the native save dialog. It must be a real local directory and an <code>.mp4</code> path. If you omit the extension, Cutterhoochee adds <code>.mp4</code>; another extension is rejected. <strong>Every export requires a <code>Permission required</code> approval for the MP4</strong>, including a new file. Review the exact destination and choose <strong>Allow once</strong> only if writing it is intended. If SRT is enabled, a <strong>second separate approval</strong> is required for that file. Existing MP4 and SRT files each require their own overwrite approval; verify both targets before allowing replacement.</p>
+<p>The exporter writes temporary files, renders every frame through the captured canonical renderer, encodes with FFmpeg, probes the result, verifies H.264 video, AAC audio, 48 kHz stereo audio, dimensions, frame rate, and duration, then atomically finalizes the destination. A failed/cancelled export should not be treated as a valid deliverable.</p>
+<h3 id="114-monitor-cancel-and-inspect-the-result">11.4 Monitor, cancel, and inspect the result</h3>
+<p>After start, the dialog shows a job state such as <strong>Waiting for export worker…</strong> or <strong>Rendering immutable revision…</strong>, progress, and a job ID. The states are:</p>
+<ul>
+<li><code>queued</code></li>
+<li><code>running</code></li>
+<li><code>completed</code></li>
+<li><code>failed</code></li>
+<li><code>cancelled</code></li>
+</ul>
+<p>Click <strong>Cancel</strong>/the stop control while the job is running if you need to stop it. A cancelled job is not a finalized export. Do not open a partially written temporary file from the destination directory.</p>
+<p>After successful completion, the dialog shows <strong>Export complete</strong> and enables:</p>
+<ul>
+<li><strong>Play</strong> — opens the finalized MP4 in the approved native opener.</li>
+<li><strong>Show file</strong> — reveals the finalized MP4 in the file manager.</li>
+<li><strong>Exported</strong> is the disabled completed-action label, not a close button. Use the <strong>Close export dialog</strong> icon to dismiss the dialog.</li>
+</ul>
+<p>The native runtime rechecks the finalized file identity before <strong>Play</strong> or <strong>Show file</strong>. If the destination was replaced after completion, those actions fail rather than opening a different file. If you manually replace the file, export again to a new destination or start a fresh export.</p>
+<h2 id="12-keyboard-shortcuts">12. Keyboard shortcuts</h2>
+<p>These shortcuts are implemented by the current UI. Global workspace bindings apply outside input, textarea, select, and content-editable controls; the focused-control bindings near the end of the table have their own contexts. The exercised desktop platform is Linux; <code>Cmd</code> describes implemented macOS key handling, not a verified macOS package.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Shortcut</th>
+<th>Action</th>
+<th>Conditions and notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Space</code></td>
+<td>Toggle Preview play/pause</td>
+<td>Works when the focus is outside an editing field.</td>
+</tr>
+<tr>
+<td><code>Left Arrow</code></td>
+<td>Move playhead one frame backward</td>
+<td>Clamped at frame 0.</td>
+</tr>
+<tr>
+<td><code>Right Arrow</code></td>
+<td>Move playhead one frame forward</td>
+<td>Moves by one project frame.</td>
+</tr>
+<tr>
+<td><code>S</code></td>
+<td>Split selected clip at playhead</td>
+<td>No modifier; a clip must be selected and the playhead must be strictly inside it; a dissolve must be removed first.</td>
+</tr>
+<tr>
+<td><code>Delete</code></td>
+<td>Remove selected clips</td>
+<td>If <code>Shift</code> is also held <strong>and</strong> a non-empty ruler range is selected, the range action takes precedence; otherwise this falls through to selected-clip deletion.</td>
+</tr>
+<tr>
+<td><code>Shift+Delete</code></td>
+<td>Remove selected range with ripple</td>
+<td>Requires a non-empty ruler range for range removal. With no valid range, it falls through to deleting selected clips, so verify the highlighted range before pressing it. This is destructive to later timing but undoable.</td>
+</tr>
+<tr>
+<td><code>Ctrl/Cmd+Z</code></td>
+<td>Undo</td>
+<td>Project history, revision-checked.</td>
+</tr>
+<tr>
+<td><code>Ctrl/Cmd+Shift+Z</code></td>
+<td>Redo</td>
+<td>Project history, revision-checked.</td>
+</tr>
+<tr>
+<td><code>Ctrl/Cmd+I</code></td>
+<td>Import media</td>
+<td>Opens the native media chooser.</td>
+</tr>
+<tr>
+<td><code>Ctrl/Cmd+S</code></td>
+<td>Save project</td>
+<td>Synchronizes the current project file and directory; edits are already atomically persisted. No Save As chooser.</td>
+</tr>
+<tr>
+<td><code>Ctrl/Cmd+E</code></td>
+<td>Open Export video</td>
+<td>Opens export; it does not silently begin rendering until destination/permissions are handled.</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Send assistant prompt</td>
+<td>In <strong>Describe an edit…</strong>; use <code>Shift+Enter</code> for a new line.</td>
+</tr>
+<tr>
+<td><code>Shift+Enter</code></td>
+<td>New line in assistant prompt</td>
+<td>Does not send the prompt.</td>
+</tr>
+<tr>
+<td><code>Enter</code> or <code>Space</code></td>
+<td>Select a focused media card</td>
+<td>When the media card itself has focus, not a child control.</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Search transcript</td>
+<td>When focus is in <strong>Find a phrase</strong>.</td>
+</tr>
+<tr>
+<td><code>Arrow Up</code>/<code>Arrow Down</code></td>
+<td>Resize timeline</td>
+<td>When the focus is on the <strong>Resize timeline</strong> separator.</td>
+</tr>
+<tr>
+<td><code>Arrow Left</code>/<code>Arrow Right</code></td>
+<td>Resize Assistant</td>
+<td>When the focus is on the <strong>Resize assistant</strong> separator.</td>
+</tr>
+</tbody></table></div>
+<p><code>Ctrl</code> is used on Linux/Windows-style keyboards and <code>Cmd</code> on macOS. The app’s save-screen footer displays the platform-neutral <code>Ctrl/Cmd+I Import</code>, <code>Ctrl/Cmd+S Save</code>, and <code>Ctrl/Cmd+E Export</code> hints.</p>
+<p><code>Backspace</code> is not a timeline-delete shortcut, and <code>Ctrl/Cmd+Y</code> is not the implemented redo shortcut.</p>
+<h2 id="13-practical-end-to-end-tutorial">13. Practical end-to-end tutorial</h2>
+<p>This workflow intentionally uses only controls that are visible and implemented. It works with generated test media or your own local files.</p>
+<h3 id="131-create-a-portrait-captioned-cut">13.1 Create a portrait captioned cut</h3>
+<ol>
+<li>Launch the Linux x64 AppImage and confirm <strong>Desktop ready</strong>.</li>
+<li>Under <strong>New project</strong>, enter <code>Portrait demo</code> as <strong>Project name</strong>.</li>
+<li>Set <strong>Aspect</strong> to <strong>Portrait · 9:16</strong>.</li>
+<li>Leave <strong>Frame rate</strong> at <strong>30 fps</strong>, click <strong>Create project</strong>, and select the parent folder. Note the resulting <code>Portrait demo.cutproj</code> path.</li>
+<li>Open <strong>Media</strong> and click <strong>Import media</strong>.</li>
+<li>Select one video with an audio stream and, optionally, a separate WAV file or still PNG/JPEG/WebP.</li>
+<li>Wait until the imported card has a thumbnail/duration and no <strong>Preparing normalized media…</strong> warning.</li>
+<li>Select the video card and click <strong>Add to timeline</strong>; this appends it to the end of the first video track, not at the playhead. Select an audio card and add it to <strong>Main Audio</strong> if you need a separate music/voice layer; the default audio insertion starts at frame 0 and is capped to the existing timeline duration.</li>
+<li>Click the video clip in <strong>Timeline</strong>. In <strong>Inspector</strong>, confirm <strong>Timing</strong> and set <strong>Fit</strong> to <strong>Contain</strong> if you want the complete frame visible. Click <strong>Apply timing</strong> only after checking the whole-frame values.</li>
+<li>Play the project. If the preview remains unavailable, toggle the quality button from <strong>auto</strong> to <strong>software</strong>, then click <strong>Retry preview</strong> if shown.</li>
+<li>Drag the timeline ruler over an unwanted opening section. Confirm the start/end frames in the range highlight <strong>before</strong> pressing <code>Shift+Delete</code>; with no valid range, that shortcut deletes selected clips instead. Immediately use <strong>Undo</strong> if the ripple result affects a track you meant to preserve.</li>
+<li>Put the playhead on a clean boundary, select the clip, and press <code>S</code> to split. Do not split inside a dissolve; this example has none.</li>
+<li>Select the <strong>Transcript</strong> tab and choose the video under <strong>Audio/video source</strong>.</li>
+<li>Click <strong>Transcribe locally</strong>. On first use, review <strong>Download local speech model?</strong>. If you accept the one-time download, click <strong>Download and transcribe</strong>; otherwise click <strong>Not now</strong> and continue with manual text or <strong>Import SRT</strong>.</li>
+<li>Search for a phrase using <strong>Find a phrase</strong>. Click a result to seek to its source range and verify the words against the audio.</li>
+<li>Select the matching video clip in the timeline and click <strong>Apply captions</strong>. Review each <code>CC</code> block in <strong>Timeline</strong>. Reapplying later will replace all captions owned by this clip, so finish any transcript-derived caption edits after the last application.</li>
+<li>Return to <strong>Media</strong> or use <strong>Add title</strong> at the current playhead. Select the title block, edit <strong>Text</strong>, and adjust <strong>Style</strong>, size, and positions in <strong>Inspector</strong>.</li>
+<li>Select the first clip, identify the next clip, and use <strong>Transitions</strong> → <strong>Frames</strong> → <strong>Dissolve next</strong> to add a short dissolve only if both clips are long enough. Preview the overlap.</li>
+<li>Use <strong>Gain · dB</strong>, <strong>Fade in</strong>, and <strong>Fade out</strong> to balance audio. <strong>Clip audio</strong> can exclude the video clip’s own sound. Do not rely on track <strong>Mute</strong> or an audio-track clip’s checkbox for silence; check audible output.</li>
+<li>Save with <code>Ctrl/Cmd+S</code>. Wait for <strong>Saved locally</strong>.</li>
+<li>Click <strong>Export</strong>. Choose <code>1080p</code> for a full-size portrait deliverable, check <strong>SRT caption sidecar</strong> if a separate subtitle file is wanted, and start the export.</li>
+<li>Choose the MP4 destination. Review and answer its mandatory <strong>Allow once</strong> request and the separate SRT request if enabled; inspect existing-file overwrite details for each.</li>
+<li>Wait for <strong>Export complete</strong> and 100% progress. Use <strong>Play</strong> to watch the finalized MP4, and <strong>Show file</strong> to reveal it. Keep the MP4 and <code>.srt</code> together if you selected the sidecar.</li>
+</ol>
+<h3 id="132-optional-pi-assisted-variation">13.2 Optional Pi-assisted variation</h3>
+<p>At step 10 or later, connect a provider in <strong>Provider settings</strong>, select a model reported by that provider, and return to <strong>Assistant chat</strong>. Instead of making a broad request, send one auditable operation at a time:</p>
+<pre><code class="language-text">Find the phrase “setup explanation” in the selected audio/video source.
+Do not edit the project. Return the matching source frame range and tell me if timing is approximate.
+</code></pre>
+<p>Review the result. Then, if you want an edit:</p>
+<pre><code class="language-text">On the selected video clip only, remove the first 30 project frames with ripple enabled.
+Do not change Main Audio or captions. Stop after the edit so I can review the new revision.
+</code></pre>
+<p>Before the first prompt in an unapproved context—including either example above—inspect <strong>Share project evidence?</strong> and deliberately choose <strong>Deny</strong> or <strong>Allow evidence</strong>. This is broader project-context consent, not permission for only the phrase or clip named in the prompt. For a native command, inspect <strong>Permission required</strong> separately. A prompt that says “make this vertical” cannot change the project profile through an unsupported hidden control; create a new portrait project and re-import/assemble there if you need a different aspect.</p>
+<h2 id="14-troubleshooting">14. Troubleshooting</h2>
+<h3 id="browser-preview--native-required">“Browser preview · native required”</h3>
+<p>You are not connected to the native desktop bridge. Launch the Linux x64 AppImage itself. Browser mode is not sufficient for native project dialogs, media imports, normalization, transcript model download, export, or permission prompts.</p>
+<h3 id="the-start-screen-does-not-create-a-project">The start screen does not create a project</h3>
+<ul>
+<li>Confirm the native save/location dialog was not cancelled.</li>
+<li>Use a writable, real local directory.</li>
+<li>Do not choose a directory that already contains a project if you intended <strong>New project</strong>; the store refuses to overwrite an existing project at that location.</li>
+<li>Check that the name is not only whitespace.</li>
+<li>Choose one of the supported aspect/frame-rate combinations.</li>
+</ul>
+<h3 id="the-project-is-busy-or-another-instance-is-open">“The project is busy” or another instance is open</h3>
+<p>A project directory is locked by its active writer. Close the other Cutterhoochee window/process and retry <strong>Open project</strong>. Do not delete <code>.project.lock</code> while another process may still be writing.</p>
+<h3 id="a-media-card-stays-in-preparation">A media card stays in preparation</h3>
+<ul>
+<li>Wait for the media job to finish; video normalization creates master/proxy artifacts and can take longer than thumbnail generation.</li>
+<li>Check the card’s warning text: <strong>Preparing normalized media…</strong>, <strong>Media preparation is incomplete.</strong>, and <strong>Thumbnail unavailable.</strong> identify different stages.</li>
+<li>Confirm the source is a standalone local file from a supported family, not a playlist/network source.</li>
+<li>Confirm the source is a standalone local file from a supported family, not a playlist/network source.</li>
+<li>Confirm the source or required managed artifact still exists and has not changed while import runs.</li>
+<li>If native preparation reports missing/incomplete normalized media, use <strong>Relink</strong> and select the intended source; an absent original path alone does not require relinking when the managed masters/PCM are intact.</li>
+<li>If the file has no decodable video/audio stream, or has an unsupported demuxer, re-encode it to a conventional local MP4/WAV/PNG/JPEG/WebP file before importing.</li>
+</ul>
+<h3 id="a-source-imports-but-has-no-usable-audio">A source imports but has no usable audio</h3>
+<p>Only assets with normalized audio appear in the Transcript source selector. Confirm the source actually contains an audio stream and that preparation completed. A video-only file can still be edited/exported; it simply cannot be transcribed until you import a source with audio.</p>
+<h3 id="no-normalized-audio-source">“No normalized audio source”</h3>
+<p>Import a video or audio asset with an audio stream, wait for normalization, then reopen/refresh <strong>Transcript</strong>. Selecting an image or a video-only asset cannot create a transcript.</p>
+<h3 id="the-preview-is-blank-slow-or-shows-buffering">The preview is blank, slow, or shows <code>buffering</code></h3>
+<ol>
+<li>Confirm the asset card is ready and the source thumbnail/waveform is not still preparing.</li>
+<li>Click <strong>Retry preview</strong> if the error overlay offers it.</li>
+<li>Toggle the quality control from <strong>auto</strong> to <strong>software</strong>.</li>
+<li>Seek to a nearby frame using <strong>Previous frame</strong>, <strong>Next frame</strong>, or <strong>Preview playhead</strong>.</li>
+<li>Check that the project has at least one clip and that the clip’s source range is valid.</li>
+<li>If only one source fails, relink/re-import a conventional local copy and inspect the native error notice.</li>
+</ol>
+<p>Software preview is a diagnostic/preview fallback, not a promise of hardware acceleration or full-resolution playback.</p>
+<h3 id="preview-plays-video-but-no-sound-is-audible">Preview plays video but no sound is audible</h3>
+<p>Check video-clip <strong>Clip audio</strong>, <strong>Gain · dB</strong>, fades, and the playhead interval. Track <strong>Mute/Unmute</strong> is currently stored state only; an audio-track clip’s <strong>Clip audio</strong> checkbox also does not exclude its sound from the render plan. Neither is a reliable playback/export mute. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.</p>
+<h3 id="split-says-the-playhead-is-outside-the-clip">Split says the playhead is outside the clip</h3>
+<p>Move the playhead strictly between the clip’s first and last frame. The first and last boundaries are not valid split positions. If an explicit dissolve touches the clip, use <strong>Remove dissolve</strong>, split, and add a new valid transition afterward.</p>
+<h3 id="range-removal-changed-more-tracks-than-intended">Range removal changed more tracks than intended</h3>
+<p><code>Shift+Delete</code> invokes ripple range removal. It can shorten/split clips and shift later clips/text. Immediately use <strong>Undo</strong>, then lock tracks you intend to protect and repeat with a narrower ruler range. Do not assume locked tracks can always be ripple-edited; the native editor may reject a change that would touch a locked caption/text track.</p>
+<h3 id="inspector-says-values-are-invalid">Inspector says values are invalid</h3>
+<p>Timing values must be non-negative whole frames and duration must be positive. Canvas positions are base points from <code>0</code> to <code>10000</code>; gain accepts the range exposed by the control. Leave a field to commit on blur, then refresh. If the clip is involved in a dissolve, remove/rebuild the transition around the new timing.</p>
+<h3 id="add-a-text-track-before-creating-a-title">“Add a text track before creating a title”</h3>
+<p>The current project has no text track. Add or restore a text track through the supported editor operation/build before clicking <strong>Add title</strong>. Do not expect the plus button to create a missing track automatically.</p>
+<h3 id="transcription-asks-for-model-consent-every-time">Transcription asks for model consent every time</h3>
+<p>The model status is checked in app-owned storage. Review the displayed <strong>File</strong>, <strong>Revision</strong>, and <strong>SHA-256</strong>. If the model is not present or fails verification, a fresh <strong>Download and transcribe</strong> consent is expected. Decline with <strong>Not now</strong> if you do not want a network download; use <strong>Import SRT</strong> or manual text instead.</p>
+<h3 id="transcription-returns-no-spans-or-approximate-timing">Transcription returns no spans or approximate timing</h3>
+<p>The native transcription parser may return no speech spans for silent/unsupported audio. Approximate spans are marked <code>approx.</code>. Review the audio and edit text/timing manually. Do not apply an empty/no-span result as if it were a transcript.</p>
+<h3 id="apply-captions-is-disabled-or-rejected"><strong>Apply captions</strong> is disabled or rejected</h3>
+<p>Select a transcript source, a transcript produced/imported for that source, and a placed clip whose asset is the same source. Applying captions replaces all existing captions owned by that clip, including manual text/style/layout edits; apply only after you are ready to regenerate that clip’s owned captions. A transcript hit from another asset cannot be applied to the current clip. If the clip does not cover the transcript’s source range, extend/choose the correct clip or import the relevant source range.</p>
+<h3 id="provider-shows-not-connected-or-no-models">Provider shows “Not connected” or no models</h3>
+<ul>
+<li>Select the intended provider in <strong>Connections</strong>.</li>
+<li>Choose the provider-supported <strong>Authentication</strong> method.</li>
+<li>For API keys, enter the key in <strong>API key</strong>; never in chat.</li>
+<li>If the keyring is unavailable, enable <strong>Session-only credential</strong> and retry.</li>
+<li>Complete any native auth prompt, then click <strong>Refresh providers</strong>.</li>
+<li>Select a model from the reported <strong>Model</strong> list; the app does not invent models.</li>
+</ul>
+<p>For OpenAI Codex, use its own OAuth/PKCE sign-in. Do not reuse an OpenAI API key as Codex credentials.</p>
+<h3 id="a-provider-request-asks-for-evidence">A provider request asks for evidence</h3>
+<p>Every assistant prompt needs the project evidence grant before running. Read the provider/account and project scope in <strong>Share project evidence?</strong>. Choose <strong>Deny</strong> to withhold it, or <strong>Allow evidence</strong> only if future managed frames, thumbnails, and transcript spans from that context may be shared. It is not a one-asset or one-range approval. See Section 10 for its persistence and the <strong>Close project</strong> revocation procedure.</p>
+<h3 id="a-permission-prompt-shows-an-unexpected-commandpath">A permission prompt shows an unexpected command/path</h3>
+<p>Choose <strong>Deny</strong>. Review the exact executable, arguments, working directory, paths, URL, destination, overwrite flag, and scope. Ask Pi again with a narrower prompt only after confirming the current project and provider. A completed external effect is not reversed by timeline <strong>Undo</strong>.</p>
+<h3 id="save-reports-an-unknown-outcome">Save reports an unknown outcome</h3>
+<p>Stop editing that project, follow the notice to reopen it, and inspect the reopened revision. Do not assume whether the last write won or failed, and do not copy/replace <code>project.json</code> while the old writer remains open.</p>
+<h3 id="export-fails-is-cancelled-or-cannot-open-the-output">Export fails, is cancelled, or cannot open the output</h3>
+<ul>
+<li>Verify the project is non-empty and all referenced artifacts are available.</li>
+<li>Confirm the destination is a real local directory and the filename is <code>.mp4</code>.</li>
+<li>Review the exact overwrite permission request for both MP4 and optional SRT.</li>
+<li>Wait for <code>completed</code>/<strong>Export complete</strong> before using <strong>Play</strong> or <strong>Show file</strong>.</li>
+<li>If the destination was replaced after completion, export again to a new path; the identity check intentionally refuses to open a different file at the same path.</li>
+<li>A cancelled or failed job is not a valid deliverable, even if a temporary file is visible.</li>
+</ul>
+<h3 id="the-project-opens-but-media-is-missing-on-another-machine">The project opens but media is missing on another machine</h3>
+<p>A complete <code>.cutproj</code> copy with intact managed masters, PCM, and other referenced artifacts remains editable, playable, and exportable even if original paths differ. Do not relink merely because an original moved. If required normalized media is actually missing and <strong>Relink</strong> is offered, select the matching source and wait for preparation. Preserve original media separately if you may need regeneration later. Windows/macOS portability is not verified by this guide.</p>
+<h2 id="15-privacy-storage-and-portability">15. Privacy, storage, and portability</h2>
+<h3 id="151-what-is-stored-where">15.1 What is stored where</h3>
+<p>A <code>.cutproj</code> directory contains the portable project document (<code>project.json</code>) and app-managed media/artifact directories. The artifact store uses finite, app-owned directories for normalized masters, proxies, PCM, still images, thumbnails, waveforms, frames, and transcripts. The project document records IDs, content identities, profile/timeline entities, and references; it is not a loose arbitrary-path cache.</p>
+<p>Local transcript files are managed artifacts outside <code>project.json</code>. They are tied to source content identity and frame ranges so that an evidence result from one source is not silently used for another.</p>
+<p>The installation also has app-owned storage for provider/keyring integration and the downloaded speech model. Permission grants and provider evidence authority are installation/workspace-scoped and do not become portable project permissions merely because the project directory is copied.</p>
+<h3 id="152-originals-and-derived-media">15.2 Originals and derived media</h3>
+<p>Importing reads the original through a native file grant and writes normalized masters/proxies/PCM to app-managed storage. The original file is never deleted by library <strong>Remove</strong>. A complete <code>.cutproj</code> copy that retains its managed masters/PCM and other referenced artifacts remains editable, playable, and exportable even if the original path later moves or its original grant is unavailable. If you need to archive a project, preserve:</p>
+<ol>
+<li>The complete <code>.cutproj</code> directory, including <code>project.json</code> and managed artifacts.</li>
+<li>Original source files as an additional archive when you may need to regenerate missing artifacts or relink an incomplete asset.</li>
+</ol>
+<p><strong>Relink</strong> is a recovery path for missing/incomplete normalized media, not a required step merely because an original path is absent. Do not delete the media subdirectories while a project is open.</p>
+<h3 id="153-network-boundaries">15.3 Network boundaries</h3>
+<ul>
+<li>The editor’s default workflow is local and the start screen says <strong>Offline by default · no telemetry</strong>.</li>
+<li>The first-use speech-model download is an explicit network action shown in <strong>Download local speech model?</strong>. It is downloaded to app-owned storage; the media remains local.</li>
+<li>Provider login and assistant prompts can contact the configured provider after you connect it.</li>
+<li>All assistant prompts require the separate <strong>Share project evidence?</strong> grant before running. That approval covers managed frame/thumbnail/transcript evidence in the workspace/project/provider/account context, not only one asset, one range, or one prompt. Later in-scope evidence may not prompt again.</li>
+<li>Permission dialogs identify external HTTP, file, and system operations. Approve only the exact request you understand.</li>
+</ul>
+<p>This guide does not claim that a provider’s own retention, billing, regional processing, or account policies are the same as Cutterhoochee’s local storage behavior. Review the provider’s policy before connecting an account or allowing evidence.</p>
+<h3 id="154-backups-and-copying">15.4 Backups and copying</h3>
+<p>To make a project backup:</p>
+<ol>
+<li>Save with <code>Ctrl/Cmd+S</code>.</li>
+<li>Wait for the local save status to settle.</li>
+<li>Close the project.</li>
+<li>Copy the complete <code>.cutproj</code> directory to a backup volume.</li>
+<li>Preserve original media if you may need to regenerate missing artifacts or recover an incomplete import.</li>
+</ol>
+<p>Do not copy only <code>project.json</code>, only the <code>media</code> folder, or only the AppImage and assume the edit is portable. Do not copy credentials or app-data directories into a project backup.</p>
+<h2 id="16-limitations-and-glossary">16. Limitations and glossary</h2>
+<h3 id="161-current-limitations">16.1 Current limitations</h3>
+<ul>
+<li>This guide verifies the Linux x64 AppImage workflow. Windows and macOS are unverified.</li>
+<li>Browser preview is not a native desktop runtime; native file access, normalization, provider auth, permissions, and export require the desktop bridge.</li>
+<li>Project aspects are limited to 16:9, 9:16, and 1:1.</li>
+<li>Project frame rates are limited to 24, 25, 30, and 60 fps. Timeline timing is integer frame-based.</li>
+<li>Native export offers 720p and 1080p choices and produces H.264 video with AAC, 48 kHz stereo audio after validation. Arbitrary dimensions/codecs are not exposed by the current export surface.</li>
+<li>Import rejects playlists and network media (including HLS/DASH/concat/segment/HTTP/RTSP paths) and requires an allowed standalone demuxer/decodable stream.</li>
+<li>Transcription requires normalized 48 kHz stereo audio and the native-pinned multilingual model, or an imported SRT for the manual-caption route. Generated wording/timing requires review.</li>
+<li>The local model download and assistant evidence sharing are separate consents. Neither is implied by opening a project.</li>
+<li>Provider/model availability is dynamic. Only connected providers and their reported models/capabilities appear.</li>
+<li>Pi can request editor and external operations, but AI output is not a substitute for revision review. External effects approved through permissions are not reversed by timeline Undo.</li>
+<li>Preview <strong>Software</strong> mode is a bounded fallback for display; it is not an export-quality guarantee.</li>
+<li>The current UI exposes same-track clip movement and insertion; do not assume arbitrary cross-track drag-and-drop, arbitrary track creation, or hidden project-profile conversion controls.</li>
+<li>Track <strong>Mute</strong> is not consumed by the current render plan. <strong>Clip audio</strong> excludes video-track clip audio but does not exclude audio-track clips. These limitations can affect exported audio; do not mistake a stored muted/disabled state for guaranteed silence.</li>
+</ul>
+<h3 id="162-glossary">16.2 Glossary</h3>
+<p><strong>AppImage</strong> — A self-contained Linux application package used by the exercised Cutterhoochee build.</p>
+<p><strong>Asset</strong> — A project library entry representing an imported original plus its recorded identity and normalized artifacts.</p>
+<p><strong>Artifact</strong> — An app-managed derived file such as a master, proxy, PCM audio file, thumbnail, waveform, frame, or transcript.</p>
+<p><strong>Base point (bp)</strong> — Cutterhoochee’s normalized coordinate unit. Canvas positions and scale/opacity use bounded base-point values rather than CSS pixels.</p>
+<p><strong>Caption</strong> — An editable <code>CC</code> text item, usually generated from transcript spans or imported SRT cues and rendered into the project.</p>
+<p><strong>Clip</strong> — A placed use of an asset on a track. It has project <code>Start</code>, source <code>Source in</code>, <code>Duration</code>, and audio/visual properties.</p>
+<p><strong>Content identity</strong> — The recorded identity/content hash and filesystem metadata used to detect a changed, moved, or replaced original.</p>
+<p><strong>Dissolve</strong> — An explicit video transition whose two clips overlap by an exact number of frames.</p>
+<p><strong>Evidence</strong> — Sampled frames and/or transcript spans requested for assistant inspection. Evidence sharing requires explicit provider/account consent.</p>
+<p><strong>Frame</strong> — The integer timing coordinate used by the project timeline. It is converted to timecode using the project frame rate.</p>
+<p><strong>Generation</strong> — The native session/project scope token used to reject stale operations after a project is closed or changed.</p>
+<p><strong>Master</strong> — The normalized project-profile video artifact used for canonical preview/export rendering.</p>
+<p><strong>Normalized audio</strong> — App-owned 48 kHz stereo PCM derived from an imported audio stream.</p>
+<p><strong>Pi</strong> — The optional assistant runtime/harness behind <strong>Assistant chat</strong>. Pi may request edits, evidence, or permission-gated external operations.</p>
+<p><strong>Proxy</strong> — A lower-resolution, same-frame-count normalized video artifact used to make preview work more practical.</p>
+<p><strong>Project revision</strong> — The monotonically advancing document state captured by edits/saves. Export pins the revision it captures.</p>
+<p><strong>Render plan</strong> — The native, immutable composition/timing/audio description used by preview and export for one project revision.</p>
+<p><strong>Ripple range removal</strong> — <code>Shift+Delete</code> on a selected ruler range. It removes the range and shifts later timeline content while projecting affected clips/text/captions.</p>
+<p><strong>SRT</strong> — SubRip Subtitle text format. Cutterhoochee can import SRT cues as editable captions and can optionally export a sidecar beside the MP4.</p>
+<p><strong>Source in</strong> — The first source frame used by a clip. Changing it changes which normalized source frames appear without necessarily changing the clip’s timeline start.</p>
+<p><strong>Track</strong> — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; the current mute-state rendering limitation is described above.</p>
+<p><strong>Workspace</strong> — The app-owned authority scope that binds a project, managed artifacts, credentials/permissions, and native runtime state. Workspace authority is not copied into the portable project JSON.</p>
+</main><footer>Readable offline. Markdown is the editable source. GIFs are silent workflow examples, not performance measurements.</footer></body></html>
