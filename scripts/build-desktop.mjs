@@ -91,6 +91,8 @@ const env = {
   // linuxdeploy's bundled strip cannot read modern ELF RELR sections.
   // Preserve the optimized binaries instead of rewriting them with old binutils.
   NO_STRIP: "1",
+  // Keep nested AppImages in extraction mode in containers without libfuse2.
+  APPIMAGE_EXTRACT_AND_RUN: "1",
   CUTTERHOOCHEE_REQUIRE_AGENT: "1",
   // linuxdeploy's hook assumes Debian's helper directory. Pass a staging
   // directory containing only the bundled helper ELFs; runtime never uses PATH.
@@ -112,7 +114,7 @@ try {
   run(["build:agent"]);
   run(["build:web"]);
   run(["prepare:sidecars"]);
-  run(["exec", "tauri", "build", ...(bundleLinux ? ["--bundles", "appimage"] : [])]);
+  run(["exec", "tauri", "build", ...(bundleLinux ? ["--bundles", "appimage", "--verbose"] : [])]);
 } finally {
   if (stagedGstreamerHelperDir) {
     rmSync(stagedGstreamerHelperDir, { recursive: true, force: true });
