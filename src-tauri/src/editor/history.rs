@@ -5,7 +5,7 @@ use crate::project::model::{
     MAX_HISTORY_ENTRIES,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use ts_rs::TS;
 
 fn invalid(message: impl Into<String>) -> AppError {
@@ -225,7 +225,28 @@ impl TransactionDelta {
         self.validate()?;
         document.validate()?;
         let mut candidate = document.clone();
+        self.apply_in_place(&mut candidate, forward)?;
+        *document = candidate;
+        Ok(())
+    }
 
+    /// Apply a validated delta to a caller-owned staged document. This is
+    /// crate-private because a failure may leave the candidate partially
+    /// changed; the store discards that candidate on every error.
+    pub(crate) fn apply_validated(
+        &self,
+        document: &mut ProjectDocument,
+        forward: bool,
+    ) -> Result<(), AppError> {
+        self.validate()?;
+        self.apply_in_place(document, forward)
+    }
+
+    fn apply_in_place(
+        &self,
+        document: &mut ProjectDocument,
+        forward: bool,
+    ) -> Result<(), AppError> {
         let mut metadata = self
             .changes
             .iter()
@@ -247,8 +268,8 @@ impl TransactionDelta {
                 change.before.as_ref()
             };
             let current = EntityState::Document {
-                name: candidate.name.clone(),
-                profile: candidate.profile.clone(),
+                name: document.name.clone(),
+                profile: document.profile.clone(),
             };
             if Some(&current) != expected {
                 return Err(AppError::new(
@@ -259,8 +280,8 @@ impl TransactionDelta {
             let Some(EntityState::Document { name, profile }) = target else {
                 return Err(invalid("Document metadata cannot be deleted"));
             };
-            candidate.name = name.clone();
-            candidate.profile = profile.clone();
+            document.name = name.clone();
+            document.profile = profile.clone();
         }
 
         let assets: Vec<_> = self
@@ -269,7 +290,7 @@ impl TransactionDelta {
             .filter(|change| change.entity.kind == EntityKind::Asset)
             .collect();
         apply_collection(
-            &mut candidate.assets,
+            &mut document.assets,
             &assets,
             forward,
             |value| &value.id,
@@ -281,7 +302,7 @@ impl TransactionDelta {
             .filter(|change| change.entity.kind == EntityKind::Track)
             .collect();
         apply_collection(
-            &mut candidate.tracks,
+            &mut document.tracks,
             &tracks,
             forward,
             |value| &value.id,
@@ -293,7 +314,7 @@ impl TransactionDelta {
             .filter(|change| change.entity.kind == EntityKind::Clip)
             .collect();
         apply_collection(
-            &mut candidate.clips,
+            &mut document.clips,
             &clips,
             forward,
             |value| &value.id,
@@ -305,7 +326,7 @@ impl TransactionDelta {
             .filter(|change| change.entity.kind == EntityKind::TextItem)
             .collect();
         apply_collection(
-            &mut candidate.text_items,
+            &mut document.text_items,
             &text_items,
             forward,
             |value| &value.id,
@@ -317,15 +338,14 @@ impl TransactionDelta {
             .filter(|change| change.entity.kind == EntityKind::Transition)
             .collect();
         apply_collection(
-            &mut candidate.transitions,
+            &mut document.transitions,
             &transitions,
             forward,
             |value| &value.id,
             EntityState::Transition,
         )?;
 
-        candidate.validate()?;
-        *document = candidate;
+        document.validate()?;
         Ok(())
     }
 }
@@ -346,9 +366,9 @@ where
         return Ok(());
     }
 
-    let mut by_id = HashMap::with_capacity(values.len());
+    let mut by_id: HashMap<&str, (usize, &T)> = HashMap::with_capacity(values.len());
     for (index, value) in values.iter().enumerate() {
-        if by_id.insert(id(value).to_owned(), (index, value)).is_some() {
+        if by_id.insert(id(value), (index, value)).is_some() {
             return Err(invalid("The document contains duplicate entity IDs"));
         }
     }
@@ -358,7 +378,7 @@ where
         } else {
             change.after.as_ref()
         };
-        match (by_id.get(&change.entity.id), expected) {
+        match (by_id.get(change.entity.id.as_str()), expected) {
             (Some((_, current)), Some(expected)) => {
                 if to_state((*current).clone()) != *expected {
                     return Err(AppError::new(
@@ -387,7 +407,13 @@ where
         .iter()
         .map(|change| change.entity.id.as_str())
         .collect();
-    values.retain(|value| !ids.contains(id(value)));
+    let current_values = std::mem::take(values);
+    let mut unchanged = Vec::with_capacity(current_values.len());
+    for value in current_values {
+        if !ids.contains(id(&value)) {
+            unchanged.push(value);
+        }
+    }
 
     let mut inserts: Vec<(&EntityDelta, &EntityState, u32)> = changes
         .iter()
@@ -414,13 +440,24 @@ where
         }
         previous_index = Some(*index);
     }
+
+    let mut output = Vec::with_capacity(unchanged.len() + inserts.len());
+    let mut unchanged = unchanged.into_iter();
     for (change, target, index) in inserts {
-        if index as usize > values.len() {
+        let index = index as usize;
+        while output.len() < index {
+            let Some(value) = unchanged.next() else {
+                return Err(invalid("History delta collection index is out of bounds"));
+            };
+            output.push(value);
+        }
+        if output.len() != index {
             return Err(invalid("History delta collection index is out of bounds"));
         }
-        let value = state_to_value(target.clone(), &change.entity.kind)?;
-        values.insert(index as usize, value);
+        output.push(state_to_value(target.clone(), &change.entity.kind)?);
     }
+    output.extend(unchanged);
+    *values = output;
     Ok(())
 }
 
@@ -627,6 +664,13 @@ impl ProjectDocument {
     pub fn diff(&self, other: &Self) -> Result<TransactionDelta, AppError> {
         self.validate()?;
         other.validate()?;
+        self.diff_validated(other)
+    }
+
+    /// Diff documents whose graph and entity invariants have already been
+    /// checked by the caller. This private store/editor boundary avoids
+    /// validating both sides again after a staged candidate was validated.
+    pub(crate) fn diff_validated(&self, other: &Self) -> Result<TransactionDelta, AppError> {
         if self.project_id != other.project_id {
             return Err(invalid("Cannot diff documents from different projects"));
         }
@@ -718,22 +762,28 @@ fn diff_collection<T, Id, ToState>(
         .enumerate()
         .map(|(index, value)| (id(value), (index, value)))
         .collect();
-    let ids: BTreeSet<&str> = before_by_id
-        .keys()
-        .copied()
-        .chain(after_by_id.keys().copied())
-        .collect();
+    let mut ids = Vec::with_capacity(before_by_id.len() + after_by_id.len());
+    ids.extend(before_by_id.keys().copied());
+    ids.extend(after_by_id.keys().copied());
+    ids.sort_unstable();
+    ids.dedup();
 
     for entity_id in ids {
         let before_value = before_by_id.get(entity_id);
         let after_value = after_by_id.get(entity_id);
+        let changed = match (before_value, after_value) {
+            (Some((before_index, before)), Some((after_index, after))) => {
+                before != after || before_index != after_index
+            }
+            _ => true,
+        };
+        if !changed {
+            continue;
+        }
         let before_state = before_value.map(|(_, value)| to_state((*value).clone()));
         let after_state = after_value.map(|(_, value)| to_state((*value).clone()));
         let before_index = before_value.map(|(index, _)| *index as u32);
         let after_index = after_value.map(|(index, _)| *index as u32);
-        if before_state == after_state && before_index == after_index {
-            continue;
-        }
         changes.push(EntityDelta {
             entity: EntityRef::new(kind, entity_id),
             before: before_state,
@@ -741,5 +791,55 @@ fn diff_collection<T, Id, ToState>(
             before_index,
             after_index,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::model::{AspectRatio, FrameRate, Track, TrackKind};
+
+    fn empty_document() -> ProjectDocument {
+        ProjectDocument::new("history fixture", AspectRatio::Landscape, FrameRate::FPS_30)
+            .expect("document")
+    }
+
+    fn assert_round_trip(before: &ProjectDocument, after: &ProjectDocument) {
+        let delta = before.diff(after).expect("diff");
+        let mut forward = before.clone();
+        delta.apply_forward(&mut forward).expect("forward replay");
+        assert_eq!(forward, *after);
+
+        let mut backward = after.clone();
+        delta
+            .apply_backward(&mut backward)
+            .expect("backward replay");
+        assert_eq!(backward, *before);
+    }
+
+    #[test]
+    fn diff_preserves_reorder_insert_delete_and_skips_unchanged_payloads() {
+        let before = empty_document();
+        assert!(before.diff(&before).expect("unchanged diff").is_empty());
+
+        let mut reordered = before.clone();
+        reordered.tracks.swap(0, 1);
+        assert_round_trip(&before, &reordered);
+
+        let mut inserted = before.clone();
+        inserted.tracks.insert(
+            1,
+            Track::new(
+                "90000000-0000-4000-8000-000000000001".to_owned(),
+                TrackKind::Audio,
+                "Inserted".to_owned(),
+            )
+            .expect("track"),
+        );
+        assert_round_trip(&before, &inserted);
+
+        let mut deleted = before.clone();
+        deleted.tracks.remove(1);
+        assert_round_trip(&before, &deleted);
     }
 }

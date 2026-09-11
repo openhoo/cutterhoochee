@@ -211,6 +211,9 @@ impl GraphicsRuntime {
                         Ok(())
                     },
                 )?;
+                if edit.changed {
+                    context.record_asset_commit(asset.id.clone(), edit.revision)?;
+                }
                 context.progress(0.95)?;
                 Ok(GraphicReply {
                     asset_id: asset.id,
@@ -242,7 +245,7 @@ fn generated_asset(
     fps_num: u32,
     fps_den: u32,
 ) -> AssetManifest {
-    let source_hash = digest_hex(png);
+    let source_hash = digest_hex(&Sha256::digest(png));
     AssetManifest {
         id: asset_id.to_owned(),
         kind: AssetKind::StillImage,
@@ -741,6 +744,33 @@ mod tests {
             r##"<svg xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#123456"/></svg>"##,
         ))
         .expect("safe SVG");
+    }
+
+    #[test]
+    fn generated_png_asset_has_a_publishable_content_hash() {
+        let png = tiny_skia::Pixmap::new(640, 360)
+            .expect("test pixmap")
+            .encode_png()
+            .expect("encoded PNG");
+        let artifact = ArtifactRecord {
+            artifact_id: format!("{}.png", "a".repeat(64)),
+            cache_key: "generated-graphic-test".to_owned(),
+            kind: ArtifactKind::StillImage,
+            content_type: "image/png".to_owned(),
+            byte_size: png.len() as u64,
+        };
+        let asset = generated_asset(
+            &Uuid::new_v4().to_string(),
+            "card",
+            &png,
+            &artifact,
+            640,
+            360,
+            30,
+            1,
+        );
+        asset.validate().expect("generated PNG can be published");
+        assert_eq!(asset.content_hash.len(), 64);
     }
 
     #[test]

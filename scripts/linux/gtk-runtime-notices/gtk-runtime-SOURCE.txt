@@ -1,0 +1,56 @@
+Cutterhoochee GTK/Glycin runtime provenance
+===========================================
+
+This notice describes the additional programs and data copied into the
+AppImage by scripts/linux/linuxdeploy-plugin-gtk.sh.
+
+linuxdeploy-plugin-gtk.sh
+  Source: https://github.com/tauri-apps/linuxdeploy-plugin-gtk
+  Pinned commit: b5eb8d05b4c0ed40107fe2158c5d8527f94568ef
+  License: MIT (see linuxdeploy-plugin-gtk-LICENSE.txt)
+  The vendored source is the upstream helper with the narrow gdk-pixbuf
+  Glycin compatibility branch documented in its header.
+
+GdkPixbuf
+  Package: gdk-pixbuf2 2.44.7-1 (Arch Linux)
+  Source: https://gitlab.gnome.org/GNOME/gdk-pixbuf
+  License: LGPL-2.0-or-later (see gdk-pixbuf-LICENSE.txt)
+  This package links the Glycin runtime rather than shipping legacy external
+  gdk-pixbuf loader modules.
+
+Glycin loaders and runtime library
+  Package: glycin 2.1.5-2 (Arch Linux)
+  Upstream: https://gitlab.gnome.org/GNOME/glycin
+  Version source: https://github.com/GNOME/glycin/releases/tag/2.1.5
+  License: MPL-2.0 OR LGPL-2.1-or-later (see glycin-LICENSE.txt)
+  Staged loaders: glycin-image-rs, glycin-svg, glycin-heif, glycin-jxl.
+  Installed config templates are preserved under
+  usr/share/glycin-loaders/2+/conf.d/ and selected loader executables are
+  copied to usr/bin/.
+
+Bubblewrap
+  Package: bubblewrap 0.11.2-1 (Arch Linux)
+  Source: https://github.com/containers/bubblewrap/releases/tag/v0.11.2
+  License: LGPL-2.0-or-later (see bubblewrap-LICENSE.txt)
+  The installed ELF is copied as usr/bin/cutterhoochee-bwrap and receives
+  $ORIGIN/../lib:/cutterhoochee/lib RUNPATH, as do the loaders. usr/bin/bwrap
+  adds only a read-only AppDir/usr/lib bind at /cutterhoochee/lib. The fixed
+  sandbox path lets the dynamic linker work without exposing /proc or
+  restoring environment variables cleared by Glycin.
+
+Shared MIME data
+  Package: shared-mime-info 2.5.1-2 (Arch Linux)
+  Source: https://gitlab.freedesktop.org/xdg/shared-mime-info/-/tree/2.5.1
+  License: GPL-2.0-or-later (see shared-mime-info-LICENSE.txt)
+  The installed usr/share/mime tree, including mime.cache, is copied so
+  Glycin content typing does not depend on host MIME data.
+
+HEIF codec library
+  Package: libheif 1.23.1-4 (Arch Linux)
+  Source: https://github.com/strukturag/libheif/releases/tag/v1.23.1
+  Packaging source: https://gitlab.archlinux.org/archlinux/packaging/packages/libheif
+  License: LGPL-3.0-or-later (see libheif-LICENSE.txt)
+  Required by glycin-heif; copied with its shared-library dependency closure.
+
+AppImage notice destination
+  usr/lib/Cutterhoochee/resources/notices/gtk-runtime/

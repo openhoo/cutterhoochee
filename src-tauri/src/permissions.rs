@@ -149,6 +149,9 @@ pub struct PermissionRequest {
     pub operation_id: String,
     pub scope: PermissionScope,
     pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tool_call_id: Option<String>,
     pub details: PermissionDetails,
     #[ts(type = "SafeInteger")]
     pub expires_at_ms: u64,
@@ -1200,6 +1203,7 @@ impl PermissionsRuntime {
         self.insert_pending(
             scope,
             run_id,
+            caller.tool_call_id.clone(),
             details,
             ExactOperation::FileGrant {
                 paths: identities,
@@ -1446,7 +1450,7 @@ impl PermissionsRuntime {
             timeout_ms: None,
             overwrite: false,
         };
-        self.insert_pending(scope, run_id, details, exact)
+        self.insert_pending(scope, run_id, caller.tool_call_id.clone(), details, exact)
     }
 
     /// Request approval for a native export destination. The destination is
@@ -1492,6 +1496,7 @@ impl PermissionsRuntime {
         self.insert_pending(
             scope,
             run_id,
+            caller.tool_call_id.clone(),
             details,
             ExactOperation::ExportDestination {
                 target,
@@ -1617,7 +1622,7 @@ impl PermissionsRuntime {
             timeout_ms: None,
             overwrite: request.overwrite,
         };
-        self.insert_pending(scope, run_id, details, exact)
+        self.insert_pending(scope, run_id, caller.tool_call_id.clone(), details, exact)
     }
 
     pub fn request_system_execute(
@@ -1658,6 +1663,7 @@ impl PermissionsRuntime {
         self.insert_pending(
             scope,
             run_id,
+            caller.tool_call_id.clone(),
             details,
             ExactOperation::SystemExecute {
                 executable,
@@ -1707,6 +1713,7 @@ impl PermissionsRuntime {
         self.insert_pending(
             scope,
             run_id,
+            caller.tool_call_id.clone(),
             details,
             ExactOperation::SystemHttp {
                 url,
@@ -2232,6 +2239,7 @@ impl PermissionsRuntime {
         &self,
         scope: PermissionScope,
         run_id: Option<String>,
+        tool_call_id: Option<String>,
         details: PermissionDetails,
         exact: ExactOperation,
     ) -> Result<PermissionRequest, AppError> {
@@ -2240,6 +2248,7 @@ impl PermissionsRuntime {
             operation_id: Uuid::new_v4().to_string(),
             scope,
             run_id,
+            tool_call_id,
             details,
             expires_at_ms: now.saturating_add(PERMISSION_TTL.as_millis() as u64),
         };
@@ -3827,6 +3836,63 @@ mod tests {
         assert_eq!(normalize_timeout(None).unwrap(), DEFAULT_COMMAND_TIMEOUT_MS);
         assert!(normalize_timeout(Some(MAX_COMMAND_TIMEOUT_MS + 1)).is_err());
     }
+    // `kill(-pgid, 0)` reports zombie members as present. On Linux inspect
+    // process state so this regression does not depend on PID 1 reaping an
+    // orphaned descendant before it can observe that no process is alive.
+    #[cfg(all(unix, target_os = "linux"))]
+    fn process_group_has_running_members(pgid: u32) -> bool {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return true;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                continue;
+            };
+            if name.parse::<u32>().is_err() {
+                continue;
+            }
+            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+                continue;
+            };
+            let Some((_, fields)) = stat.rsplit_once(") ") else {
+                continue;
+            };
+            let mut fields = fields.split_whitespace();
+            let Some(state) = fields.next() else {
+                continue;
+            };
+            let Some(_parent) = fields.next() else {
+                continue;
+            };
+            let Some(group) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
+                continue;
+            };
+            if group == pgid && !matches!(state, "Z" | "X") {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn process_group_has_running_members(pgid: u32) -> bool {
+        unsafe { libc::kill(-(pgid as libc::pid_t), 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_process_group_to_stop(pgid: u32) {
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if !process_group_has_running_members(pgid) {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approved command process group should stop");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn revoking_run_terminates_an_approved_command_process_group() {
@@ -3851,10 +3917,14 @@ mod tests {
             .expect("command lease");
         let observed = lease.cancellation.clone();
         let task_cancellation = lease.cancellation.clone();
+        let child_marker = root.join(".command-child.pid");
         let cwd = root.to_string_lossy().into_owned();
         let mut task = tokio::spawn(async move {
             let _lease = lease;
-            let arguments = vec!["-c".to_owned(), "/usr/bin/sleep 30 & wait".to_owned()];
+            let arguments = vec![
+                "-c".to_owned(),
+                r#"/usr/bin/sleep 30 & child=$!; while ! kill -0 "$child" 2>/dev/null; do :; done; printf '%s\n' "$child" > .command-child.pid; wait "$child""#.to_owned(),
+            ];
             run_approved_command(
                 "/bin/sh",
                 &arguments,
@@ -3875,6 +3945,26 @@ mod tests {
         })
         .await
         .expect("approved command should spawn");
+        let child_pid = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let child_pid = fs::read_to_string(&child_marker)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok());
+                if let Some(child_pid) = child_pid {
+                    if child_pid != 0
+                        && child_pid != pid
+                        && unsafe { libc::getpgid(child_pid as libc::pid_t) } == pid as libc::pid_t
+                    {
+                        break child_pid;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approved command descendant should join process group");
+        assert_ne!(child_pid, pid);
+        assert!(process_group_has_running_members(pid));
         permissions
             .revoke_run(scope.generation, &run_id)
             .expect("revoke command run");
@@ -3893,7 +3983,8 @@ mod tests {
                 .code,
             ErrorCode::StaleSession
         );
-        assert_eq!(unsafe { libc::kill(-(pid as i32), 0) }, -1);
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+        wait_for_process_group_to_stop(pid).await;
         fs::remove_dir_all(root).expect("remove command fixture");
     }
 

@@ -5,11 +5,13 @@ import type { EditOp, EditorClient, ProjectSnapshot, TimelineSelection } from "@
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { callNative, isEditorClientError, numberValue, record, replyPayload, stringValue } from "@/lib/native";
+import { isTerminalActivity, useAgentActivities, type AgentActivityStore } from "@/activity/AgentActivityStore";
 
 export type TranscriptPanelProps = {
   client: EditorClient;
   snapshot: ProjectSnapshot;
   selection: TimelineSelection;
+  activityStore: AgentActivityStore;
   onEdit: (label: string, operations: readonly EditOp[]) => Promise<void>;
   onRefresh: () => Promise<void>;
   onNotice: (notice: string) => void;
@@ -29,8 +31,7 @@ function parseSearchHit(value: unknown, fallbackAssetId: string, fallbackTranscr
   }
   return { transcriptId, assetId, startFrame, endFrame, text: stringValue(item.text, "Transcript span"), approximate: Boolean(item.approximate) };
 }
-
-export function TranscriptPanel({ client, snapshot, selection, onEdit, onRefresh, onNotice, onSeek }: TranscriptPanelProps) {
+export function TranscriptPanel({ client, snapshot, selection, activityStore, onEdit, onRefresh, onNotice, onSeek }: TranscriptPanelProps) {
   const [assetId, setAssetId] = useState(() => snapshot.document.assets.find((asset) => (asset.kind === "video" || asset.kind === "audio") && Boolean(asset.normalization?.audio))?.id ?? "");
   const [transcriptId, setTranscriptId] = useState("");
   const [transcriptAssetId, setTranscriptAssetId] = useState<string | null>(null);
@@ -43,6 +44,17 @@ export function TranscriptPanel({ client, snapshot, selection, onEdit, onRefresh
   const [message, setMessage] = useState<string | null>(null);
   const sourceAssets = useMemo(() => snapshot.document.assets.filter((asset) => (asset.kind === "video" || asset.kind === "audio") && Boolean(asset.normalization?.audio)), [snapshot.document.assets]);
   const selectedAsset = sourceAssets.find((asset) => asset.id === assetId);
+  const activities = useAgentActivities(activityStore);
+  const sourceWork = activities.find((activity) => activity.jobIds.length > 0 && activity.targets.some((target) => target.kind === "asset" && target.id === assetId));
+  const cancelSourceWork = async () => {
+    if (!sourceWork) return;
+    try {
+      for (const jobId of sourceWork.jobIds) await callNative(client, { method: "jobs", params: { action: "cancel", jobId } });
+      onNotice("Cancel requested; waiting for the native job to finish.");
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : "The native cancellation request failed.");
+    }
+  };
   const selectedSourceKey = selectedAsset ? `${selectedAsset.id}:${selectedAsset.contentHash}` : "";
   const sourceIdentityRef = useRef(selectedSourceKey);
   const currentSourceKeyRef = useRef(selectedSourceKey);
@@ -258,6 +270,14 @@ export function TranscriptPanel({ client, snapshot, selection, onEdit, onRefresh
   return <div className="panel-stack transcript-panel">
     <div className="panel-heading"><div><p className="eyebrow">Evidence</p><h2>Transcript</h2></div><Captions aria-hidden="true" className="panel-heading-icon" /></div>
     {sourceAssets.length > 0 ? <label className="field-group"><span className="field-label">Audio/video source</span><select value={assetId} onChange={(event) => switchAsset(event.target.value)}>{sourceAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.original.fileName}</option>)}</select></label> : <div className="empty-panel"><FileText aria-hidden="true" /><strong>No normalized audio source</strong><span>Import a video or audio asset with normalized audio to create local transcript evidence.</span></div>}
+    {sourceWork ? <section className={`activity-entry activity-entry-${sourceWork.phase}`} aria-label="Source activity">
+      <strong>{sourceWork.label}</strong>
+      <span role="status">{sourceWork.phase.replaceAll("_", " ")}</span>
+      {sourceWork.progress !== undefined && !isTerminalActivity(sourceWork) ? <progress max={1} value={sourceWork.progress} aria-label="Source job progress" /> : null}
+      {sourceWork.message ? <p>{sourceWork.message}</p> : null}
+      {sourceWork.error ? <p role="alert">{sourceWork.error.message}</p> : null}
+      {!isTerminalActivity(sourceWork) ? <Button variant="ghost" size="sm" disabled={sourceWork.phase === "cancelling"} onClick={() => void cancelSourceWork()}>Cancel</Button> : null}
+    </section> : null}
     <div className="transcript-actions"><Button variant="secondary" size="sm" disabled={!assetId || busy !== null} onClick={() => void run("transcribe")}><Sparkles aria-hidden="true" />{busy === "transcribe" ? "Transcribing…" : "Transcribe locally"}</Button><Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => void run("srt")}><Upload aria-hidden="true" />Import SRT</Button></div>
     <div className="search-box"><Search aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void run("search"); }} placeholder="Find a phrase" aria-label="Search transcript" /><button type="button" onClick={() => void run("search")} aria-label="Search transcript"><ChevronRight aria-hidden="true" /></button></div>
     {transcriptId ? <div className="transcript-id"><span>Transcript</span><code>{transcriptId}</code><Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => void applyCaptions()}>{busy === "captions" ? "Applying…" : "Apply captions"}</Button></div> : null}

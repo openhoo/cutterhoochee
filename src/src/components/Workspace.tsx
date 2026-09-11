@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   ChevronDown,
-  ChevronRight,
-  CircleHelp,
   Download,
   Film,
   FolderOpen,
@@ -18,6 +16,7 @@ import {
   Settings2,
   Sun,
   Undo2,
+  Upload,
   X,
 } from "lucide-react";
 
@@ -54,12 +53,19 @@ import {
   type EventPayload,
 } from "@/lib/native";
 import { ChatPanel } from "@/components/ChatPanel";
+import { ActivityPanel } from "@/components/ActivityPanel";
+import {
+  AgentActivityStore,
+  isAgentActivity,
+  type ActivityReveal,
+} from "@/activity/AgentActivityStore";
 import { ClipInspector } from "@/components/ClipInspector";
 import { ExportDialog } from "@/components/ExportDialog";
 import { MediaLibrary } from "@/components/MediaLibrary";
 import { Preview } from "@/components/Preview";
 import { ProviderSettings } from "@/components/ProviderSettings";
 import { Timeline } from "@/components/Timeline";
+import { PlaybackFrameStore, usePlaybackFrame } from "@/components/PlaybackFrameStore";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 
 export type Theme = "dark" | "light";
@@ -168,6 +174,26 @@ function errorMessage(error: unknown): string {
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
+function clampSelection(
+  value: TimelineSelection,
+  snapshot: ProjectSnapshot,
+  timeline: TimelineSnapshot | null,
+): TimelineSelection {
+  const knownClips = new Set(snapshot.document.clips.map((clip) => clip.id));
+  const knownText = new Set(snapshot.document.textItems.map((item) => item.id));
+  const clipIds = value.clipIds.filter((id) => knownClips.has(id));
+  const textIds = value.textIds.filter((id) => knownText.has(id));
+  const duration = Math.max(0, timeline?.durationFrames ?? 0);
+  const playheadFrame = Math.max(0, Math.min(duration, Number.isSafeInteger(value.playheadFrame) ? value.playheadFrame : 0));
+  if (clipIds.length > 0 || textIds.length > 0 || !value.range) {
+    return { clipIds, textIds, playheadFrame };
+  }
+  const startFrame = Math.max(0, Math.min(duration, value.range.startFrame));
+  const endFrame = Math.max(startFrame, Math.min(duration, value.range.endFrame));
+  return endFrame > startFrame
+    ? { clipIds, textIds, playheadFrame, range: { startFrame, endFrame } }
+    : { clipIds, textIds, playheadFrame };
+}
 
 function eventText(event: WorkspaceEvent): string {
   const data = record(event.data);
@@ -205,37 +231,24 @@ export function Workspace({
   const [exportOpen, setExportOpen] = useState(false);
   const [eventLog, setEventLog] = useState<WorkspaceEvent[]>([]);
   const [transportPlaying, setTransportPlaying] = useState(false);
-  const [transportFrame, setTransportFrame] = useState(selection.playheadFrame);
+  const [revealActivity, setRevealActivity] = useState<ActivityReveal | null>(null);
+  const activityStore = useMemo(
+    () => new AgentActivityStore({ projectId: snapshot.document.projectId, generation: status.generation }),
+    [snapshot.document.projectId, status.generation],
+  );
+  const refreshedActivityRevisions = useMemo(() => new Map<string, number | undefined>(), [activityStore]);
   const chatResizeStart = useRef<{ x: number; width: number } | null>(null);
   const timelineResizeStart = useRef<{ y: number; height: number } | null>(null);
   const permissionAnswering = useRef<string | null>(null);
   const permissionPollToken = useRef(0);
+  const selectionMutation = useRef(0);
+  const lastSelectionActivity = useRef(-1);
+  const frameStoreRef = useRef<PlaybackFrameStore | null>(null);
+  const frameStore = frameStoreRef.current ?? (frameStoreRef.current = new PlaybackFrameStore(selection.playheadFrame));
 
   const refresh = useCallback(async () => {
-    const expectedContext = client.getContext();
     await onRefresh();
-    const loadedContext = client.getContext();
-    if (
-      loadedContext.generation !== expectedContext.generation ||
-      loadedContext.projectId !== expectedContext.projectId
-    ) {
-      return;
-    }
-    try {
-      const nextTimeline = await client.timelineSnapshot();
-      const currentContext = client.getContext();
-      if (
-        currentContext.generation !== expectedContext.generation ||
-        currentContext.projectId !== expectedContext.projectId
-      ) {
-        return;
-      }
-      onTimeline(nextTimeline);
-      setSelection(nextTimeline.selection);
-    } catch {
-      // The parent refresh already presents the authoritative native error.
-    }
-  }, [client, onRefresh, onTimeline]);
+  }, [onRefresh]);
 
   const commit = useCallback(
     async (label: string, operations: readonly EditOp[]) => {
@@ -255,18 +268,28 @@ export function Workspace({
     },
     [client, refresh, snapshot.document.revision],
   );
-
   const updateSelection = useCallback(
     async (next: TimelineSelection) => {
-      setSelection(next);
+      const request = ++selectionMutation.current;
+      const previous = selection;
+      const optimistic = clampSelection(next, snapshot, timeline);
+      setSelection(optimistic);
+      frameStore.set(optimistic.playheadFrame);
       try {
-        const updated = await client.setTimelineSelection(next);
-        onTimeline(updated);
+        const updated = await client.setTimelineSelection(optimistic);
+        if (request !== selectionMutation.current) return;
+        const authoritative = clampSelection(updated.selection, snapshot, updated);
+        setSelection(authoritative);
+        frameStore.set(authoritative.playheadFrame);
+        onTimeline({ ...updated, selection: authoritative });
       } catch (error) {
+        if (request !== selectionMutation.current) return;
+        setSelection(previous);
+        frameStore.set(previous.playheadFrame);
         setNotice(errorMessage(error));
       }
     },
-    [client, onTimeline],
+    [client, frameStore, onTimeline, selection, snapshot, timeline],
   );
 
   const projectCommand = useCallback(
@@ -282,8 +305,14 @@ export function Workspace({
   );
 
   useEffect(() => {
-    setSelection(timeline?.selection ?? { clipIds: [], textIds: [], playheadFrame: 0 });
-  }, [timeline]);
+    const nextSelection = clampSelection(
+      timeline?.selection ?? { clipIds: [], textIds: [], playheadFrame: 0 },
+      snapshot,
+      timeline,
+    );
+    setSelection(nextSelection);
+    frameStore.set(nextSelection.playheadFrame);
+  }, [frameStore, snapshot, timeline]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -307,26 +336,34 @@ export function Workspace({
       setEventLog((current) => [...current.slice(-255), nextEvent]);
       const data = eventData(nextEvent);
       const eventKind = nextEvent.kind.toLowerCase();
+      if (eventKind === "agent_activity") {
+        const candidate = record(data.activity ?? data);
+        const activity = isAgentActivity(candidate) ? candidate : null;
+        if (activity) {
+          activityStore.ingest(activity);
+          if (activity.origin === "agent" && activity.tool === "timeline" && activity.action === "selection" && activity.phase === "completed" && activity.sequence > lastSelectionActivity.current) {
+            lastSelectionActivity.current = activity.sequence;
+            const mutation = ++selectionMutation.current;
+            void client.timelineSnapshot().then((updated) => {
+              const currentContext = client.getContext();
+              if (disposed || mutation !== selectionMutation.current || currentContext.generation !== context.generation || currentContext.projectId !== context.projectId) return;
+              onTimeline(updated);
+            }).catch((error) => setNotice(errorMessage(error)));
+          }
+          if (activity.changed && !activity.dryRun && (!refreshedActivityRevisions.has(activity.id) || refreshedActivityRevisions.get(activity.id) !== activity.revision)) {
+            refreshedActivityRevisions.set(activity.id, activity.revision);
+            if (refreshedActivityRevisions.size > 128) refreshedActivityRevisions.delete(refreshedActivityRevisions.keys().next().value!);
+            void refresh().catch(() => undefined);
+          }
+        }
+      }
       if (eventKind.includes("permission") && (eventKind.includes("pending") || eventKind.includes("requested") || eventKind === "permission")) {
         const request = permissionFromValue(data);
         if (request && permissionAnswering.current !== request.operationId) setPermission(request);
       }
-      if (eventKind.includes("job") || eventKind.includes("media") || eventKind.includes("export")) {
+      if (eventKind !== "media_drop_failed" && (eventKind.includes("job") || eventKind.includes("media") || eventKind.includes("export"))) {
         const text = eventText(nextEvent);
         if (text) setNotice(text);
-        const eventStatus = stringValue(data.status || data.state).toLowerCase();
-        const terminal = eventKind.includes("completed") || eventKind.includes("ready") || eventKind.includes("failed") || eventKind.includes("cancelled")
-          || eventStatus === "completed" || eventStatus === "ready" || eventStatus === "failed" || eventStatus === "cancelled";
-        if (terminal && (eventKind.includes("job") || eventKind.includes("media"))) void refresh();
-      }
-      const assistantToolCompleted =
-        eventKind === "assistant_tool_end" &&
-        data.isError !== true &&
-        typeof data.error !== "string";
-      const assistantSettled =
-        eventKind === "assistant_settled" || eventKind === "assistant_end";
-      if (assistantToolCompleted || assistantSettled) {
-        void refresh().catch(() => undefined);
       }
     }).then((dispose) => {
       if (disposed) dispose();
@@ -338,7 +375,7 @@ export function Workspace({
       disposed = true;
       unlisten?.();
     };
-  }, [client, refresh]);
+  }, [activityStore, client, onTimeline, refresh, refreshedActivityRevisions]);
 
   useEffect(() => {
     const onMove = (event: PointerEvent) => {
@@ -418,11 +455,18 @@ export function Workspace({
     }
   }, [permission, projectCommand]);
 
-  const selectedClip = snapshot.document.clips.find((clip) => selection.clipIds.includes(clip.id));
-  const activeTrack = selectedClip
-    ? snapshot.document.tracks.find((track) => track.id === selectedClip.trackId)
-    : undefined;
-  const selectedTransitions = selectedClip ? findTransitionForClip(snapshot, selectedClip.id) : [];
+  const selectedClip = useMemo(() => {
+    const selectedClipIds = new Set(selection.clipIds);
+    return snapshot.document.clips.find((clip) => selectedClipIds.has(clip.id));
+  }, [selection.clipIds, snapshot.document.clips]);
+  const activeTrack = useMemo(
+    () => selectedClip ? snapshot.document.tracks.find((track) => track.id === selectedClip.trackId) : undefined,
+    [selectedClip, snapshot.document.tracks],
+  );
+  const selectedTransitions = useMemo(
+    () => selectedClip ? findTransitionForClip(snapshot, selectedClip.id) : [],
+    [selectedClip, snapshot],
+  );
   const appendAsset = useCallback(async (assetId: string) => {
     const asset = snapshot.document.assets.find((candidate) => candidate.id === assetId);
     if (!asset) return;
@@ -487,6 +531,9 @@ export function Workspace({
   const handlePlayState = useCallback((playing: boolean) => {
     setTransportPlaying(playing);
   }, []);
+  const handleFrameChange = useCallback((frame: number) => {
+    frameStore.set(frame);
+  }, [frameStore]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -554,22 +601,25 @@ export function Workspace({
             <span className="brand-name">Cutterhoochee</span>
           </div>
           <span className="topbar-divider" aria-hidden="true" />
-          <button className="project-name-button" type="button" onClick={() => void onOpenProject().catch((error) => setNotice(errorMessage(error)))} title="Open another project">
-            {snapshot.document.name}
-            <ChevronDown aria-hidden="true" />
-          </button>
+          <details className="project-menu" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }} onKeyDown={(event) => { if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}>
+            <summary className="project-name-button" aria-label={`Project menu: ${snapshot.document.name}`}>{snapshot.document.name}<ChevronDown aria-hidden="true" /></summary>
+            <div className="project-menu-actions" onClick={(event) => { if ((event.target as HTMLElement).closest("button")) { const menu = event.currentTarget.closest("details"); if (menu) { menu.open = false; menu.querySelector("summary")?.focus(); } } }}>
+              <button type="button" onClick={() => void onOpenProject().catch((error) => setNotice(errorMessage(error)))}><FolderOpen aria-hidden="true" />Open project…</button>
+              <button type="button" onClick={() => void projectCommand({ method: "project_save", params: {} }).catch(() => undefined)}>Save project<span>Ctrl/Cmd+S</span></button>
+              <button type="button" onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}Switch to {theme === "dark" ? "light" : "dark"} theme</button>
+              <button type="button" onClick={() => setProviderSettingsOpen(true)}><Settings2 aria-hidden="true" />Provider settings</button>
+              <button type="button" onClick={() => void projectCommand({ method: "project_close", params: {} }).then(onClose).catch(() => undefined)}><X aria-hidden="true" />Close project</button>
+            </div>
+          </details>
           <span className="save-state"><span className="save-dot" />{statusLabel}</span>
         </div>
         <div className="topbar-actions">
           <Button variant="ghost" size="icon" aria-label="Undo" onClick={() => void handleHistory("undo")}><Undo2 aria-hidden="true" /></Button>
           <Button variant="ghost" size="icon" aria-label="Redo" onClick={() => void handleHistory("redo")}><Redo2 aria-hidden="true" /></Button>
+          <Button variant="secondary" size="sm" aria-label="Import media" title="Import media (Ctrl/Cmd+I)" onClick={() => void projectCommand({ method: "media", params: { action: "import" } }).catch(() => undefined)}><Upload aria-hidden="true" />Import</Button>
           <Button variant="primary" size="sm" aria-label="Export video" title="Export video (Ctrl/Cmd+E)" onClick={() => setExportOpen(true)}><Download aria-hidden="true" />Export</Button>
           <span className="topbar-divider" aria-hidden="true" />
-          <Button variant="ghost" size="icon" aria-label="Toggle theme" onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
-          </Button>
-          <Button variant="ghost" size="icon" aria-label="Provider settings" onClick={() => setProviderSettingsOpen(true)}><Settings2 aria-hidden="true" /></Button>
-          <Button variant="ghost" size="icon" aria-label="Close project" onClick={() => void projectCommand({ method: "project_close", params: {} }).then(onClose).catch(() => undefined)}><X aria-hidden="true" /></Button>
+          <Button variant="ghost" size="icon" aria-label={rightOpen ? "Hide assistant" : "Open assistant"} aria-pressed={rightOpen} onClick={() => setRightOpen((open) => !open)}>{rightOpen ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}</Button>
         </div>
       </header>
 
@@ -582,9 +632,9 @@ export function Workspace({
               <button className={leftTab === "inspector" ? "pane-tab active" : "pane-tab"} role="tab" aria-selected={leftTab === "inspector"} type="button" onClick={() => setLeftTab("inspector")}><SlidersHorizontal aria-hidden="true" />Inspector</button>
             </div>
             <div className="pane-content">
-              {leftTab === "media" ? <MediaLibrary client={client} snapshot={snapshot} onRefresh={refresh} onNotice={setNotice} onImport={() => void projectCommand({ method: "media", params: { action: "import" } }).catch(() => undefined)} onInsert={(assetId) => appendAsset(assetId).catch((error) => setNotice(errorMessage(error)))} /> : null}
-              {leftTab === "transcript" ? <TranscriptPanel client={client} snapshot={snapshot} selection={selection} onEdit={commit} onRefresh={refresh} onNotice={setNotice} onSeek={(frame) => void updateSelection({ ...selection, playheadFrame: frame })} /> : null}
-              {leftTab === "inspector" ? <ClipInspector client={client} snapshot={snapshot} clip={selectedClip} track={activeTrack} transitions={selectedTransitions} selection={selection} onEdit={commit} onNotice={setNotice} /> : null}
+              {leftTab === "media" ? <MediaLibrary client={client} snapshot={snapshot} activityStore={activityStore} revealActivity={revealActivity} onRefresh={refresh} onNotice={setNotice} onImport={() => void projectCommand({ method: "media", params: { action: "import" } }).catch(() => undefined)} onInsert={(assetId) => appendAsset(assetId).catch((error) => setNotice(errorMessage(error)))} /> : null}
+              {leftTab === "transcript" ? <TranscriptPanel client={client} snapshot={snapshot} selection={selection} activityStore={activityStore} onEdit={commit} onRefresh={refresh} onNotice={setNotice} onSeek={(frame) => void updateSelection({ ...selection, playheadFrame: frame })} /> : null}
+              {leftTab === "inspector" ? <ClipInspector client={client} snapshot={snapshot} clip={selectedClip} track={activeTrack} transitions={selectedTransitions} selection={selection} activityStore={activityStore} revealActivity={revealActivity} onEdit={commit} onNotice={setNotice} /> : null}
             </div>
           </aside>
         ) : null}
@@ -592,17 +642,18 @@ export function Workspace({
         <main className="editor-main">
           <div className="preview-toolbar">
             <div className="preview-breadcrumb"><span>Preview</span><span className="toolbar-separator">/</span><span className="muted">{snapshot.document.profile.width} × {snapshot.document.profile.height}</span></div>
-            <div className="preview-meta"><span className="quality-pill">{transportPlaying ? "Playing" : "Ready"}</span><span>{formatTimecode(transportFrame, snapshot.document.profile.fpsNum, snapshot.document.profile.fpsDen)} / {formatDuration(duration, snapshot.document.profile.fpsNum, snapshot.document.profile.fpsDen)}</span></div>
+            <div className="preview-meta"><PlaybackToolbarMeta frameStore={frameStore} playing={transportPlaying} duration={duration} fpsNum={snapshot.document.profile.fpsNum} fpsDen={snapshot.document.profile.fpsDen} /></div>
           </div>
-          <div className="preview-stage"><Preview client={client} snapshot={snapshot} selection={selection} playing={transportPlaying} onPlayingChange={handlePlayState} onFrameChange={setTransportFrame} onSelectionChange={updateSelection} onNotice={setNotice} /></div>
+          <div className="preview-stage"><Preview client={client} snapshot={snapshot} selection={selection} playing={transportPlaying} onPlayingChange={handlePlayState} onFrameChange={handleFrameChange} onSelectionChange={updateSelection} onNotice={setNotice} /></div>
           <div className={isDraggingTimeline ? "resize-handle horizontal dragging" : "resize-handle horizontal"} role="separator" aria-label="Resize timeline" aria-orientation="horizontal" tabIndex={0} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); timelineResizeStart.current = { y: event.clientY, height: timelineHeight }; setIsDraggingTimeline(true); }} onKeyDown={(event) => { if (event.key === "ArrowUp") setTimelineHeight((height) => Math.min(520, height + 16)); if (event.key === "ArrowDown") setTimelineHeight((height) => Math.max(180, height - 16)); }} />
-          <section className="timeline-dock" aria-label="Timeline"><Timeline client={client} snapshot={snapshot} timeline={timeline} selection={{ ...selection, playheadFrame: transportFrame }} onSelectionChange={updateSelection} onEdit={commit} onNotice={setNotice} /></section>
+          <section className="timeline-dock" aria-label="Timeline"><Timeline client={client} snapshot={snapshot} timeline={timeline} selection={selection} playheadStore={frameStore} activityStore={activityStore} revealActivity={revealActivity} onSelectionChange={updateSelection} onEdit={commit} onNotice={setNotice} /></section>
         </main>
 
         {rightOpen ? (
           <aside className="chat-pane" aria-label="Assistant chat">
             <div className={isDraggingChat ? "resize-handle vertical dragging" : "resize-handle vertical"} role="separator" aria-label="Resize assistant" aria-orientation="vertical" tabIndex={0} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); chatResizeStart.current = { x: event.clientX, width: panelWidth }; setIsDraggingChat(true); }} onKeyDown={(event) => { if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(520, width + 16)); if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(280, width - 16)); }} />
-            <ChatPanel client={client} snapshot={snapshot} eventLog={eventLog} onRefresh={refresh} onNotice={setNotice} onProviderSettings={() => setProviderSettingsOpen(true)} />
+            <ActivityPanel client={client} store={activityStore} onReveal={setRevealActivity} />
+            <ChatPanel client={client} snapshot={snapshot} eventLog={eventLog} activityStore={activityStore} onRefresh={refresh} onNotice={setNotice} onProviderSettings={() => setProviderSettingsOpen(true)} />
           </aside>
         ) : <button className="collapsed-pane-button right" type="button" onClick={() => setRightOpen(true)} aria-label="Open assistant"><PanelRightOpen aria-hidden="true" /></button>}
       </div>
@@ -631,88 +682,25 @@ export function Workspace({
           <div className="dialog-actions"><Button variant="ghost" onClick={() => void answerPermission(false)}>Deny</Button><Button onClick={() => void answerPermission(true)}>Allow once</Button></div>
         </DialogContent>
       </Dialog>
-      <Dialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen}><DialogContent className="wide-dialog"><ProviderSettings client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setProviderSettingsOpen(false)} /></DialogContent></Dialog>
-      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent className="wide-dialog"><ExportDialog client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setExportOpen(false)} /></DialogContent></Dialog>
+      <Dialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen}><DialogContent className="wide-dialog" showCloseButton={false}><ProviderSettings client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setProviderSettingsOpen(false)} /></DialogContent></Dialog>
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent className="wide-dialog" showCloseButton={false}><ExportDialog client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setExportOpen(false)} /></DialogContent></Dialog>
     </div>
   );
 }
 
-export function StartScreen({
-  client,
-  status,
-  connection,
-  theme,
-  onThemeChange,
-  onProjectReady,
+const PlaybackToolbarMeta = memo(function PlaybackToolbarMeta({
+  frameStore,
+  playing,
+  duration,
+  fpsNum,
+  fpsDen,
 }: {
-  client: EditorClient;
-  status: ProjectStatus;
-  connection: "connected" | "unavailable";
-  theme: Theme;
-  onThemeChange: (theme: Theme) => void;
-  onProjectReady: (status: ProjectStatus) => Promise<void>;
+  frameStore: PlaybackFrameStore;
+  playing: boolean;
+  duration: number;
+  fpsNum: number;
+  fpsDen: number;
 }) {
-  const [name, setName] = useState("Untitled project");
-  const [aspect, setAspect] = useState<"16:9" | "9:16" | "1:1">("16:9");
-  const [fpsValue, setFpsValue] = useState("30");
-  const [advanced, setAdvanced] = useState(false);
-  const [busy, setBusy] = useState<"create" | "open" | "import" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [recentProjects, setRecentProjects] = useState<string[]>([]);
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("cutterhoochee.recent-projects");
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed)) setRecentProjects(parsed.filter((value): value is string => typeof value === "string").slice(0, 5));
-    } catch {
-      setRecentProjects([]);
-    }
-  }, []);
-
-  const run = async (action: "create" | "open" | "import", paths?: string[]) => {
-    setBusy(action);
-    setError(null);
-    try {
-      if (action === "create") {
-        await callNative(client, { method: "project_create", params: { name: name.trim() || "Untitled project", aspect, fpsNum: Number(fpsValue), fpsDen: 1 } });
-      } else if (action === "open") {
-        await callNative(client, { method: "project_open", params: {} });
-      } else {
-        if (!status.open) {
-          await callNative(client, { method: "project_create", params: { name: name.trim() || "Untitled project", aspect, fpsNum: Number(fpsValue), fpsDen: 1 } });
-        }
-        const validPaths = paths?.filter((path) => path.trim().length > 0);
-        await callNative(client, { method: "media", params: validPaths && validPaths.length > 0 ? { action: "import", paths: validPaths } : { action: "import" } });
-      }
-      const nextStatus = await client.projectStatus();
-      if (nextStatus.name) {
-        const next = [nextStatus.name, ...recentProjects.filter((projectName) => projectName !== nextStatus.name)].slice(0, 5);
-        setRecentProjects(next);
-        try { window.localStorage.setItem("cutterhoochee.recent-projects", JSON.stringify(next)); } catch { /* Recent names are a convenience only. */ }
-      }
-      await onProjectReady(nextStatus);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="start-shell">
-      <header className="start-topbar"><div className="brand-lockup"><span className="brand-mark"><Film aria-hidden="true" /></span><span className="brand-name">Cutterhoochee</span></div><div className="topbar-actions"><span className="connection-chip"><span className={connection === "connected" ? "status-dot" : "status-dot muted"} />{connection === "connected" ? "Desktop ready" : "Browser preview · native required"}</span><Button variant="ghost" size="icon" aria-label="Toggle theme" onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}</Button></div></header>
-      <main className="start-content"><div className="start-intro"><p className="eyebrow">Local-first video editing</p><h1>Make something worth watching.</h1><p>Shape footage, sound, captions, and ideas in one calm timeline. Your project stays on this device until you explicitly share evidence.</p></div>
-        <div className="start-grid"><section className="start-card primary"><div className="start-card-icon"><PlusIcon /></div><h2>New project</h2><p>Start with a clean timeline and choose the format that fits your story.</p><label className="field-label" htmlFor="project-name">Project name</label><input id="project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Untitled project" /><div className="field-row"><label className="field-group"><span className="field-label">Aspect</span><select value={aspect} onChange={(event) => setAspect(event.target.value as typeof aspect)}><option value="16:9">Landscape · 16:9</option><option value="9:16">Portrait · 9:16</option><option value="1:1">Square · 1:1</option></select></label><label className="field-group"><span className="field-label">Frame rate</span><select value={fpsValue} onChange={(event) => setFpsValue(event.target.value)}><option value="30">30 fps</option>{advanced ? <><option value="24">24 fps</option><option value="25">25 fps</option><option value="60">60 fps</option></> : null}</select></label></div><button className="advanced-toggle" type="button" onClick={() => setAdvanced((open) => !open)}><ChevronRight className={advanced ? "rotate-90" : ""} aria-hidden="true" />Advanced format options</button><Button size="lg" className="start-action" disabled={busy !== null} onClick={() => void run("create")}><PlusIcon />{busy === "create" ? "Creating…" : "Create project"}</Button></section>
-          <section className="start-card"><div className="start-card-icon muted"><FolderOpen aria-hidden="true" /></div><h2>Continue editing</h2><p>Open a saved <code>.cutproj</code> directory. Native dialogs keep file access explicit.</p><div className="stack-actions"><Button variant="secondary" disabled={busy !== null} onClick={() => void run("open")}><FolderOpen aria-hidden="true" />{busy === "open" ? "Opening…" : "Open project"}</Button><Button variant="ghost" disabled={busy !== null} onClick={() => void run("import")}><Download aria-hidden="true" />Import media</Button></div>{status.open ? <p className="small-note">A project is already open; refresh the desktop window to reconnect it.</p> : <p className="small-note">Recent projects appear here after the first native save.</p>}</section>
-            {recentProjects.length > 0 ? <div className="recent-projects"><span className="field-label">Recent projects</span>{recentProjects.map((projectName) => <button type="button" key={projectName} onClick={() => void run("open")}><span className="recent-project-icon"><FolderOpen aria-hidden="true" /></span><span>{projectName}</span><ChevronRight aria-hidden="true" /></button>)}</div> : null}
-        </div>
-        <div className="drop-target" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const paths = Array.from(event.dataTransfer.files).map((file) => { if ("path" in file && typeof file.path === "string") return file.path; return ""; }).filter((path) => path.length > 0); void run("import", paths); }}><Download aria-hidden="true" /><div><strong>Drop media to import</strong><span>Video, audio, PNG, JPEG, or WebP · native grant required</span></div><ChevronRight aria-hidden="true" /></div>
-        {error ? <div className="start-error" role="alert"><CircleHelp aria-hidden="true" /><span>{error}</span></div> : null}
-      </main><footer className="start-footer"><span>Offline by default · no telemetry</span><span>Ctrl/Cmd+I Import&nbsp;&nbsp;Ctrl/Cmd+S Save&nbsp;&nbsp;Ctrl/Cmd+E Export</span></footer>
-    </div>
-  );
-}
-
-function PlusIcon() {
-  return <span className="plus-glyph" aria-hidden="true">+</span>;
-}
+  const frame = usePlaybackFrame(frameStore);
+  return <><span className="quality-pill">{playing ? "Playing" : "Ready"}</span><span>{formatTimecode(frame, fpsNum, fpsDen)} / {formatDuration(duration, fpsNum, fpsDen)}</span></>;
+});

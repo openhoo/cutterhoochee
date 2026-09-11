@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -248,6 +249,8 @@ struct ProviderOperation {
     generation: u64,
     token: String,
     cancelled: bool,
+    owner_released: bool,
+    stop_acknowledged: bool,
 }
 
 #[derive(Default)]
@@ -265,6 +268,7 @@ struct AssistantInner {
 #[derive(Clone, Default)]
 pub struct AssistantRuntime {
     inner: Arc<Mutex<AssistantInner>>,
+    provider_operation_notify: Arc<Notify>,
 }
 
 impl AssistantRuntime {
@@ -607,14 +611,14 @@ impl AssistantRuntime {
         }
     }
 
-    /// Retire native assistant authority before aborting sidecar work. When
-    /// the sidecar is unavailable, pending provider operations are cancelled
-    /// and retain their marker until their owner observes the cancellation.
+    /// Retire native assistant authority before aborting sidecar work. Pending
+    /// provider operations retain a cancelled marker until both stop
+    /// acknowledgement and owner release have occurred.
     pub async fn stop(&self, state: &AppState) -> Result<(), AppError> {
         if let Some(bridge) = state.bridge() {
             return self.stop_active(state, &bridge).await;
         }
-        let active = {
+        let (active, provider_operation_token) = {
             let mut inner = self
                 .inner
                 .lock()
@@ -631,10 +635,18 @@ impl AssistantRuntime {
             if let Some(active) = active.as_ref() {
                 inner.stopping_run = Some(active.clone());
             }
+            let provider_operation_token = inner
+                .provider_operation
+                .as_ref()
+                .map(|operation| operation.token.clone());
             if let Some(operation) = inner.provider_operation.as_mut() {
                 operation.cancelled = true;
             }
-            active
+            // Native prompt answers become stale immediately. The sidecar
+            // cancellation below is responsible for rejecting its pending
+            // provider prompt and unwinding the credential lease.
+            inner.active_login = None;
+            (active, provider_operation_token)
         };
         if let Some(active) = active {
             if let Err(error) = state.retire_run(active.generation, &active.run_id) {
@@ -647,7 +659,14 @@ impl AssistantRuntime {
                         inner.stopping_run = None;
                     }
                 }
-                self.clear_login_all();
+                self.acknowledge_provider_operation_stop(provider_operation_token.as_deref());
+                if let Some(token) = provider_operation_token.as_deref() {
+                    let _ = timeout(
+                        Duration::from_secs(2),
+                        self.wait_provider_operation_settled(token),
+                    )
+                    .await;
+                }
                 return Err(error);
             }
             if let Ok(mut inner) = self.inner.lock() {
@@ -663,7 +682,14 @@ impl AssistantRuntime {
                 }
             }
         }
-        self.clear_login_all();
+        self.acknowledge_provider_operation_stop(provider_operation_token.as_deref());
+        if let Some(token) = provider_operation_token.as_deref() {
+            let _ = timeout(
+                Duration::from_secs(2),
+                self.wait_provider_operation_settled(token),
+            )
+            .await;
+        }
         Ok(())
     }
 
@@ -731,6 +757,8 @@ impl AssistantRuntime {
             generation,
             token: token.clone(),
             cancelled: false,
+            owner_released: false,
+            stop_acknowledged: false,
         });
         Ok(token)
     }
@@ -756,14 +784,74 @@ impl AssistantRuntime {
     }
 
     fn release_provider_operation(&self, token: &str) {
-        if let Ok(mut inner) = self.inner.lock() {
-            if inner
+        let settled = if let Ok(mut inner) = self.inner.lock() {
+            let mut settled = false;
+            if let Some(operation) = inner
                 .provider_operation
-                .as_ref()
-                .is_some_and(|operation| operation.token == token)
+                .as_mut()
+                .filter(|operation| operation.token == token)
             {
+                if operation.cancelled {
+                    operation.owner_released = true;
+                    settled = operation.stop_acknowledged;
+                } else {
+                    settled = true;
+                }
+            }
+            if settled {
                 inner.provider_operation = None;
             }
+            settled
+        } else {
+            false
+        };
+        if settled {
+            self.provider_operation_notify.notify_waiters();
+        }
+    }
+
+    fn acknowledge_provider_operation_stop(&self, token: Option<&str>) {
+        let Some(token) = token else {
+            return;
+        };
+        let settled = if let Ok(mut inner) = self.inner.lock() {
+            let mut settled = false;
+            if let Some(operation) = inner
+                .provider_operation
+                .as_mut()
+                .filter(|operation| operation.token == token)
+            {
+                operation.stop_acknowledged = true;
+                settled = operation.owner_released;
+            }
+            if settled {
+                inner.provider_operation = None;
+            }
+            settled
+        } else {
+            false
+        };
+        if settled {
+            self.provider_operation_notify.notify_waiters();
+        }
+    }
+
+    async fn wait_provider_operation_settled(&self, token: &str) -> Result<(), AppError> {
+        loop {
+            let notified = self.provider_operation_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let active = self
+                .inner
+                .lock()
+                .map_err(|_| AppError::io("The assistant runtime lock is unavailable"))?
+                .provider_operation
+                .as_ref()
+                .is_some_and(|operation| operation.token == token);
+            if !active {
+                return Ok(());
+            }
+            notified.await;
         }
     }
 
@@ -1293,7 +1381,7 @@ impl AssistantRuntime {
     }
 
     async fn stop_active(&self, state: &AppState, bridge: &AgentBridge) -> Result<(), AppError> {
-        let active = {
+        let (active, provider_operation_token) = {
             let mut inner = self
                 .inner
                 .lock()
@@ -1310,10 +1398,16 @@ impl AssistantRuntime {
             if let Some(active) = active.as_ref() {
                 inner.stopping_run = Some(active.clone());
             }
+            let provider_operation_token = inner
+                .provider_operation
+                .as_ref()
+                .map(|operation| operation.token.clone());
             if let Some(operation) = inner.provider_operation.as_mut() {
                 operation.cancelled = true;
             }
-            active
+            // Reject native prompt answers before asking the sidecar to stop.
+            inner.active_login = None;
+            (active, provider_operation_token)
         };
         if let Some(active) = active.as_ref() {
             // Retire first. No pending permission, credential refresh, or media
@@ -1324,11 +1418,16 @@ impl AssistantRuntime {
                         inner.stopping_run = None;
                     }
                 }
-                self.clear_login_all();
+                self.acknowledge_provider_operation_stop(provider_operation_token.as_deref());
+                if let Some(token) = provider_operation_token.as_deref() {
+                    let _ = timeout(
+                        Duration::from_secs(2),
+                        self.wait_provider_operation_settled(token),
+                    )
+                    .await;
+                }
                 return Err(error);
             }
-        } else {
-            self.clear_login_all();
         }
         let stop_result = timeout(
             Duration::from_secs(2),
@@ -1339,8 +1438,28 @@ impl AssistantRuntime {
             ),
         )
         .await;
-        if stop_result.is_err() {
+        if !matches!(stop_result, Ok(Ok(_))) {
             bridge.force_stop();
+        }
+        self.acknowledge_provider_operation_stop(provider_operation_token.as_deref());
+        if let Some(token) = provider_operation_token.as_deref() {
+            if timeout(
+                Duration::from_secs(2),
+                self.wait_provider_operation_settled(token),
+            )
+            .await
+            .is_err()
+            {
+                // A sidecar ACK alone is not enough to release the native
+                // fence. Force the bridge so an owner still awaiting its
+                // request receives an error and can release its token.
+                bridge.force_stop();
+                let _ = timeout(
+                    Duration::from_secs(2),
+                    self.wait_provider_operation_settled(token),
+                )
+                .await;
+            }
         }
         if let Some(active) = active.as_ref() {
             if let Ok(mut inner) = self.inner.lock() {
@@ -1512,5 +1631,87 @@ mod tests {
         assert!(
             AssistantRuntime::validate_auth_destination("https://auth.openai.com/callback").is_ok()
         );
+    }
+    fn install_provider_operation(runtime: &AssistantRuntime, token: &str) {
+        let mut inner = runtime.inner.lock().expect("assistant runtime lock");
+        inner.provider_operation = Some(ProviderOperation {
+            generation: 1,
+            token: token.to_owned(),
+            cancelled: true,
+            owner_released: false,
+            stop_acknowledged: false,
+        });
+    }
+
+    #[test]
+    fn provider_operation_release_before_stop_ack_waits_for_both() {
+        let runtime = AssistantRuntime::new();
+        let token = "release-before-ack";
+        install_provider_operation(&runtime, token);
+
+        runtime.release_provider_operation(token);
+        let operation = runtime
+            .inner
+            .lock()
+            .expect("assistant runtime lock")
+            .provider_operation
+            .clone()
+            .expect("cancelled operation remains fenced");
+        assert!(operation.owner_released);
+        assert!(!operation.stop_acknowledged);
+
+        runtime.acknowledge_provider_operation_stop(Some(token));
+        assert!(runtime
+            .inner
+            .lock()
+            .expect("assistant runtime lock")
+            .provider_operation
+            .is_none());
+    }
+
+    #[test]
+    fn provider_operation_stop_ack_before_release_waits_for_both() {
+        let runtime = AssistantRuntime::new();
+        let token = "ack-before-release";
+        install_provider_operation(&runtime, token);
+
+        runtime.acknowledge_provider_operation_stop(Some(token));
+        let operation = runtime
+            .inner
+            .lock()
+            .expect("assistant runtime lock")
+            .provider_operation
+            .clone()
+            .expect("unreleased operation remains fenced");
+        assert!(!operation.owner_released);
+        assert!(operation.stop_acknowledged);
+
+        runtime.release_provider_operation(token);
+        assert!(runtime
+            .inner
+            .lock()
+            .expect("assistant runtime lock")
+            .provider_operation
+            .is_none());
+    }
+
+    #[test]
+    fn provider_operation_handshake_ignores_stale_tokens() {
+        let runtime = AssistantRuntime::new();
+        let token = "current-operation";
+        install_provider_operation(&runtime, token);
+
+        runtime.release_provider_operation("stale-operation");
+        runtime.acknowledge_provider_operation_stop(Some("stale-operation"));
+        let operation = runtime
+            .inner
+            .lock()
+            .expect("assistant runtime lock")
+            .provider_operation
+            .clone()
+            .expect("current operation remains fenced");
+        assert_eq!(operation.token, token);
+        assert!(!operation.owner_released);
+        assert!(!operation.stop_acknowledged);
     }
 }

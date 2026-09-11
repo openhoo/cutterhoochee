@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "dev": "tsx src/main.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test:unit": "pnpm --filter @cutterhoochee/shared build && pnpm build && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@cutterhoochee/shared": "workspace:*",

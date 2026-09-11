@@ -140,6 +140,7 @@ pub struct PrivateRequestContext {
     pub project_id: Option<String>,
     pub generation: u64,
     pub run_id: Option<String>,
+    pub tool_call_id: Option<String>,
     pub caller: CallerContext,
 }
 
@@ -167,6 +168,8 @@ struct WireEnvelope {
     generation: u64,
     #[serde(rename = "runId", skip_serializing_if = "Option::is_none")]
     run_id: Option<String>,
+    #[serde(rename = "toolCallId", skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
     #[serde(flatten)]
     body: WireMessage,
 }
@@ -442,6 +445,7 @@ impl AgentBridge {
             project_id: self.inner.state.current_project_id(),
             generation: self.inner.generation,
             run_id,
+            tool_call_id: None,
             body: WireMessage::Request { method, params },
         };
         let encoded = encode_line(&envelope)?;
@@ -690,12 +694,14 @@ impl AgentBridge {
                         project_id: envelope.project_id.clone(),
                         generation: envelope.generation,
                         run_id: envelope.run_id.clone(),
+                        tool_call_id: envelope.tool_call_id.clone(),
                         caller: CallerContext::agent_sidecar(
                             bridge.inner.connection_id.clone(),
                             envelope.generation,
                             envelope.project_id.clone(),
                         )
-                        .with_run_id(envelope.run_id.clone()),
+                        .with_run_id(envelope.run_id.clone())
+                        .with_tool_call_id(envelope.tool_call_id.clone()),
                     };
                     tokio::spawn(async move {
                         let result = match handler {
@@ -743,7 +749,8 @@ impl AgentBridge {
                             envelope.generation,
                             envelope.project_id.clone(),
                         )
-                        .with_run_id(envelope.run_id.clone());
+                        .with_run_id(envelope.run_id.clone())
+                        .with_tool_call_id(envelope.tool_call_id.clone());
                         dispatch(request, caller, &bridge.inner.state).await
                     };
                     bridge
@@ -1144,6 +1151,7 @@ fn response_envelope(request: &WireEnvelope, result: Result<Value, AppError>) ->
         project_id: request.project_id.clone(),
         generation: request.generation,
         run_id: request.run_id.clone(),
+        tool_call_id: request.tool_call_id.clone(),
         body,
     }
 }
@@ -1293,6 +1301,18 @@ fn validate_wire_envelope(envelope: &WireEnvelope) -> Result<(), AppError> {
     {
         return Err(AppError::invalid_argument("Bridge message id is invalid"));
     }
+    if envelope
+        .tool_call_id
+        .as_deref()
+        .is_some_and(|tool_call_id| {
+            tool_call_id.is_empty()
+                || tool_call_id.len() > 256
+                || tool_call_id.contains('\r')
+                || tool_call_id.contains('\n')
+        })
+    {
+        return Err(AppError::invalid_argument("Bridge tool call id is invalid"));
+    }
     if envelope.run_id.as_deref().is_some_and(|run_id| {
         run_id.is_empty() || run_id.len() > 256 || run_id.contains('\r') || run_id.contains('\n')
     }) {
@@ -1392,6 +1412,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_wire_envelopes_interoperate_with_flat_node_messages() {
+        let node = serde_json::json!({
+            "v": PROTOCOL_VERSION,
+            "id": "wire-probe",
+            "projectId": "project",
+            "generation": 7,
+            "runId": "run",
+            "toolCallId": "tool",
+            "kind": "response",
+            "ok": true,
+            "data": {"action": "list", "providers": []}
+        });
+        let envelope: WireEnvelope =
+            serde_json::from_value(node.clone()).expect("flat Node response");
+        assert!(matches!(
+            envelope.body,
+            WireMessage::Response { ok: true, .. }
+        ));
+        assert_eq!(envelope.tool_call_id.as_deref(), Some("tool"));
+        assert_eq!(serde_json::to_value(envelope).unwrap(), node);
+    }
+
+    #[test]
     fn private_methods_are_strictly_allowlisted() {
         assert!(is_private_method("credential_read"));
         assert!(is_private_method("assistant"));
@@ -1484,6 +1527,7 @@ mod tests {
             project_id: state.current_project_id(),
             generation: state.generation(),
             run_id: Some(run_id.clone()),
+            tool_call_id: Some("tool-call".to_owned()),
             body: WireMessage::Request {
                 method: tool_request.method().to_owned(),
                 params: tool_request.params(),

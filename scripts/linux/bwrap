@@ -1,0 +1,21 @@
+#!/bin/sh
+# Cutterhoochee Glycin wrapper. Keep Glycin's sandbox arguments untouched.
+set -eu
+
+self=$(readlink -f "$0")
+appdir=$(dirname "$(dirname "$(dirname "$self")")")
+real="$appdir/usr/bin/cutterhoochee-bwrap"
+libdir="$appdir/usr/lib"
+
+[ -x "$real" ] || {
+    echo "cutterhoochee-bwrap: missing bundled bubblewrap: $real" >&2
+    exit 127
+}
+[ -d "$libdir" ] || {
+    echo "cutterhoochee-bwrap: missing bundled library directory: $libdir" >&2
+    exit 127
+}
+
+# Glycin deliberately omits /proc. The dynamic linker cannot derive the main
+# executable's $ORIGIN there, so give its packaged RUNPATH a fixed private mount.
+exec "$real" --ro-bind "$libdir" /cutterhoochee/lib "$@"

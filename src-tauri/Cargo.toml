@@ -42,9 +42,19 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 uuid = { version = "1", features = ["v4"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+glib = "0.18.5"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
 [[example]]
 name = "generate-types"
 path = "examples/generate-types.rs"
+
+# gtk-rs fixed this unsound VariantStrIter out-parameter in upstream commit
+# https://github.com/gtk-rs/gtk-rs-core/commit/b5a4071e439bef2b5eea76c3aa25e5ae84839e34
+# (RUSTSEC-2024-0429), but no patched 0.18.x release was published. Keep
+# the GTK3-compatible 0.18.5 API and apply that exact two-line backport.
+[patch.crates-io]
+glib = { path = "vendor/glib" }

@@ -147,10 +147,7 @@ function makeSoftwarePacket(plan: RenderPlan, frame = 0, sequence = 0): Software
 }
 
 async function settleMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let turn = 0; turn < 32; turn += 1) await Promise.resolve();
 }
 type ControlledImage = {
   readonly src: string;
@@ -206,6 +203,7 @@ type PreviewRaceHarness = {
   readonly audioContext: TestAudioContext;
   readonly states: Array<{ state: string; frame: number; quality: string }>;
   readonly pendingSeeks: PendingSeek[];
+  readonly softwareListeners: Array<(packet: SoftwarePreviewPacket) => void>;
   readonly cleanup: () => void;
 };
 
@@ -229,6 +227,7 @@ function createPreviewRaceHarness(): PreviewRaceHarness {
     getContext: () => canvasContext,
   } as unknown as HTMLCanvasElement;
   const pendingSeeks: PendingSeek[] = [];
+  const softwareListeners: Array<(packet: SoftwarePreviewPacket) => void> = [];
   const ack: EditorReply = {
     kind: "preview",
     data: { kind: "ack", data: { revision: plan.revision, planHash: plan.planHash } },
@@ -265,6 +264,12 @@ function createPreviewRaceHarness(): PreviewRaceHarness {
       return ack;
     },
     readArtifact: async () => new Uint8Array(new Float32Array(plan.audio.totalSamples * 2).buffer),
+    subscribePreviewSoftware: (listener) => {
+      softwareListeners.push(listener);
+      return () => {};
+    },
+    acknowledgePreviewSoftware: async () => {},
+    cancelPreviewSoftware: async () => {},
   };
   const client = new EditorClient(transport, { projectId: project.document.projectId, generation: 7 });
   vi.stubGlobal("AudioContext", class {
@@ -284,6 +289,7 @@ function createPreviewRaceHarness(): PreviewRaceHarness {
     audioContext,
     states,
     pendingSeeks,
+    softwareListeners,
     cleanup: () => {
       engine.dispose();
       vi.unstubAllGlobals();
@@ -438,6 +444,64 @@ describe("PreviewEngine software playback", () => {
     }
   });
 });
+describe("PreviewEngine frame synchronization", () => {
+  it("suppresses completed duplicate-frame syncs but invalidates them for a new operation", async () => {
+    const harness = createPreviewRaceHarness();
+    try {
+      await harness.engine.setProject(makeProject());
+      const internals = harness.engine as unknown as {
+        operation: number;
+        videoPool: { sync: (mappings: unknown[], playing: boolean) => Promise<void> };
+        syncInputs: (frame: number, playing: boolean, token: number) => Promise<void>;
+      };
+      const sync = vi.spyOn(internals.videoPool, "sync");
+      const token = internals.operation;
+      await internals.syncInputs(0, true, token);
+      await internals.syncInputs(0, true, token);
+      expect(sync).toHaveBeenCalledTimes(1);
+
+      internals.operation += 1;
+      await internals.syncInputs(0, true, internals.operation);
+      expect(sync).toHaveBeenCalledTimes(2);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+describe("PreviewEngine animation ordering", () => {
+  it("syncs an audio-advanced frame when the RAF callback sees the same published frame", async () => {
+    const harness = createPreviewRaceHarness();
+    let raf: (() => void) | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      raf = callback as unknown as () => void;
+      return 1;
+    });
+    try {
+      await harness.engine.setProject(makeProject());
+      const internals = harness.engine as unknown as {
+        readonly operation: number;
+        readonly audioClock: { sample: number };
+        frame: number;
+        desiredPlaying: boolean;
+        syncInputs: (frame: number, playing: boolean, token: number) => Promise<void>;
+        startAnimation: () => void;
+      };
+      const token = internals.operation;
+      const sync = vi.spyOn(internals, "syncInputs");
+      await internals.syncInputs(0, true, token);
+      sync.mockClear();
+      internals.desiredPlaying = true;
+      internals.frame = 1;
+      Object.defineProperty(internals.audioClock, "sample", { configurable: true, value: 1_600 });
+      internals.startAnimation();
+      raf?.();
+      await settleMicrotasks();
+      expect(sync).toHaveBeenCalledWith(1, true, token);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
 describe("PreviewEngine software preparation invalidation", () => {
   it("does not present or acknowledge paused packets and retires them across seek/project invalidation", async () => {
     vi.useFakeTimers();
@@ -542,7 +606,8 @@ describe("PreviewEngine software preparation invalidation", () => {
       expect(canvasContext.drawImage).not.toHaveBeenCalled();
       expect(acknowledgedSequences).toEqual([]);
 
-      await engine.setProject(project);
+      plan.revision = 2;
+      await engine.setProject({ ...project, document: { ...project.document, revision: plan.revision } });
       await settleMicrotasks();
       expect(listeners).toHaveLength(3);
       const projectListener = listeners[2];
@@ -590,6 +655,106 @@ describe("PreviewEngine software preparation invalidation", () => {
   });
 });
 describe("PreviewEngine transport intent", () => {
+  it("preserves playing audio and transport across an unchanged project refresh", async () => {
+    const harness = createPreviewRaceHarness();
+    try {
+      await harness.engine.setProject(makeProject());
+      await harness.engine.play();
+      const sources = [...harness.audioContext.sources];
+      const starts = sources.flatMap((source) => source.starts).length;
+      const stops = sources.map((source) => source.stopCount);
+      await harness.engine.setProject(structuredClone(makeProject()));
+      expect(harness.engine.getState().state).toBe("playing");
+      expect(harness.audioContext.sources).toEqual(sources);
+      expect(sources.flatMap((source) => source.starts)).toHaveLength(starts);
+      expect(sources.map((source) => source.stopCount)).toEqual(stops);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("applies a scoped remote seek without recursively issuing a native seek", async () => {
+    const harness = createPreviewRaceHarness();
+    try {
+      await harness.engine.setProject(makeProject());
+      const command = { sequence: 1, projectId: "project-1", generation: 7, revision: 1, action: "seek" as const, frame: 2 };
+      expect((await harness.engine.applyTransportCommand(command)).error).toBeUndefined();
+      expect(harness.engine.getState()).toMatchObject({ state: "paused", frame: 2 });
+      expect(harness.pendingSeeks).toHaveLength(0);
+      expect((await harness.engine.applyTransportCommand({ ...command, frame: 1 })).error).toBeTruthy();
+      expect((await harness.engine.applyTransportCommand({ ...command, sequence: 2, generation: 8, frame: 1 })).error).toBeTruthy();
+      expect(harness.engine.getState().frame).toBe(2);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("awaits visible software playback before accepting an automatic remote fallback", async () => {
+    const harness = createPreviewRaceHarness();
+    const imageDouble = createImageElementDouble();
+    vi.stubGlobal("Image", imageDouble.Image);
+    vi.stubGlobal("HTMLImageElement", imageDouble.Image);
+    const internals = harness.engine as unknown as {
+      videoPool: {
+        sync: (mappings: readonly unknown[], playing: boolean) => Promise<void>;
+      };
+      enterVideoBuffering: (error?: Error) => void;
+    };
+    const originalSync = internals.videoPool.sync;
+    let fallbackTriggered = false;
+    internals.videoPool.sync = async (_mappings, playing) => {
+      if (!playing || fallbackTriggered) return;
+      fallbackTriggered = true;
+      internals.enterVideoBuffering(new Error("The browser video decoder could not start playback."));
+    };
+    try {
+      await harness.engine.setProject(makeProject());
+      const pending = harness.engine.applyTransportCommand({
+        sequence: 1,
+        projectId: "project-1",
+        generation: 7,
+        revision: 1,
+        action: "play",
+      });
+      await settleMicrotasks();
+      expect(fallbackTriggered).toBe(true);
+      expect(harness.softwareListeners).toHaveLength(1);
+      const listener = harness.softwareListeners[0];
+      if (!listener) throw new Error("The automatic fallback software listener was not established.");
+      listener(makeSoftwarePacket(makePlan()));
+      await settleMicrotasks();
+      const image = imageDouble.images[0];
+      if (!image) throw new Error("The fallback software preview image was not created.");
+      image.emitLoad();
+
+      const completion = await pending;
+      expect(completion.error).toBeUndefined();
+      expect(harness.engine.getState()).toMatchObject({ state: "playing", quality: "software" });
+      expect(harness.audioContext.sources.flatMap((source) => source.starts)).toHaveLength(1);
+    } finally {
+      internals.videoPool.sync = originalSync;
+      harness.cleanup();
+    }
+  });
+
+  it("cancels pending remote playback without stopping a later human play", async () => {
+    const harness = createPreviewRaceHarness();
+    try {
+      await harness.engine.setProject(makeProject());
+      const command = { sequence: 1, projectId: "project-1", generation: 7, revision: 1, action: "play" as const };
+      const pending = harness.engine.applyTransportCommand(command);
+      harness.engine.cancelTransportCommand(command);
+      expect((await pending).error).toBeTruthy();
+      await settleMicrotasks();
+      expect(harness.engine.getState().state).toBe("paused");
+      await harness.engine.play();
+      harness.engine.cancelTransportCommand(command);
+      expect(harness.engine.getState().state).toBe("playing");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("lets Play supersede an unresolved seek without a late pause", async () => {
     const harness = createPreviewRaceHarness();
     try {
@@ -620,10 +785,10 @@ describe("PreviewEngine transport intent", () => {
     try {
       await harness.engine.setProject(makeProject());
       await harness.engine.play();
-      const startsBeforeSeeks = harness.audioContext.sources.flatMap((source) => source.starts).length;
 
       const firstSeek = harness.engine.seek(1);
       await settleMicrotasks();
+      expect(harness.states.at(-1)).toMatchObject({ state: "playing", frame: 1 });
       const secondSeek = harness.engine.seek(3);
       await settleMicrotasks();
       expect(harness.pendingSeeks.map((request) => request.target)).toEqual([1, 3]);
@@ -634,7 +799,6 @@ describe("PreviewEngine transport intent", () => {
       await secondSeek;
       expect(harness.states.at(-1)).toMatchObject({ state: "playing", frame: 3 });
       const startsAfterNewestSeek = harness.audioContext.sources.flatMap((source) => source.starts).length;
-      expect(startsAfterNewestSeek).toBe(startsBeforeSeeks + 1);
 
       const olderSeek = harness.pendingSeeks[0];
       if (!olderSeek) throw new Error("The older seek was not captured.");

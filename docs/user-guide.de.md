@@ -33,8 +33,8 @@ Cutterhoochee ist ein lokal ausgerichteter Videoeditor für Video, Audio, Bilder
 
 Cutterhoochee verbindet eine klassische, nichtlineare Timeline mit lokal gespeicherten Medienartefakten und einem optionalen Assistenten. Der typische Ablauf ist:
 
-1. Ein Projektformat wählen und ein Projekt anlegen.
-2. Video, Audio oder Bilder über einen nativen Dateidialog importieren.
+1. Über den zweistufigen Startassistenten ein Projekt anlegen oder einen gespeicherten `.cutproj`-Ordner öffnen.
+2. Video, Audio oder Bilder über einen nativen Dateidialog importieren oder externe native Dateien überall im Desktop-Fenster ablegen.
 3. Warten, bis die Medienvorbereitung abgeschlossen ist.
 4. Assets auf passende Spuren legen, schneiden, verschieben und trimmen.
 5. Vorschau, Audiopegel, Titel und Captions prüfen.
@@ -98,37 +98,35 @@ Dies benötigt zusätzlichen temporären Speicherplatz und behebt keine beschäd
 
 > **Plattformhinweis:** Linux x64 AppImage wurde ausgeführt. Windows und macOS sind in dieser Dokumentation nicht verifiziert; ihre Start- und Paketdetails dürfen nicht aus dem Linux-Ablauf abgeleitet werden.
 
-### Status beim ersten Start
-
 Oben im Startfenster sehen Sie eine Verbindungsanzeige:
 
 - `Desktop ready`: Die native Desktop-Anbindung ist verfügbar.
-- `Browser preview · native required`: Die Oberfläche läuft zwar, aber native Aktionen benötigen eine Desktop-Anbindung. Import, Öffnen, Speichern, Medienvorbereitung, lokale Transkription und Export können in diesem Zustand nicht zuverlässig abgeschlossen werden.
+- `Browser preview · desktop required`: Die Oberfläche läuft ohne native Desktop-Anbindung. Sie können die Oberfläche prüfen, aber native Dialoge, Import, Projektpersistenz, Medienvorbereitung, Export und native Anbieter-/Berechtigungsaktionen sind dort nicht verfügbar.
 
-Der Startbildschirm enthält außerdem den Hinweis `Offline by default · no telemetry`. Das bedeutet: Es gibt keinen standardmäßigen Telemetrieversand. Eine externe Anbieteranfrage oder ein ausdrücklich genehmigtes Netzwerkwerkzeug ist davon zu unterscheiden.
+Bleibt die Anzeige `Browser preview · desktop required` nach dem Start der AppImage bestehen, schließen Sie dieses Fenster und starten Sie die eigentliche AppImage statt einer Browser-Vorschau. Ein fehlender Desktop-Bridge wird nicht dadurch behoben, dass Sie den Import im Browser wiederholen.
 
 ### Neues Projekt anlegen
 
-1. Öffnen Sie im Startbildschirm den Bereich `New project`.
-2. Tragen Sie unter `Project name` einen Namen ein. Wenn das Feld leer bleibt, wird `Untitled project` verwendet.
-3. Wählen Sie unter `Aspect` eines der verifizierten Formate:
-   - `Landscape · 16:9`
-   - `Portrait · 9:16`
-   - `Square · 1:1`
-4. Wählen Sie unter `Frame rate` zunächst `30 fps`. Über `Advanced format options` werden zusätzlich `24 fps`, `25 fps` und `60 fps` angeboten.
-5. Klicken Sie auf `Create project`.
+Klicken Sie im Startbildschirm auf `Start a new project`. Der Assistent hat zwei Schritte:
 
-6. Wählen Sie im nativen Dialog den **übergeordneten Ordner**. Darin wird `<Projektname>.cutproj` angelegt. Notieren Sie diesen Pfad für späteres Öffnen und Sichern.
+1. Unter `Choose a visual format` wählen Sie eine Formatkarte:
+   - `Vertical video` — `9:16`, `1080 × 1920`, für `Shorts · Reels · TikTok`
+   - `Landscape` — `16:9`, `1920 × 1080`, für `YouTube · film`
+   - `Square` — `1:1`, `1080 × 1080`, für `Social posts`
+2. Klicken Sie auf `Continue to details`.
+3. Unter `Name and review your project` tragen Sie einen `Project name` ein. Das Feld beginnt mit `Untitled project`, aber ein nichtleerer Name ist erforderlich.
+4. `Advanced settings` ist optional. Dort wählen Sie unter `Frame rate` standardmäßig `30 fps`; zusätzlich sind `24 fps`, `25 fps` und `60 fps` verfügbar.
+5. Prüfen Sie Format, Abmessungen und Framerate, klicken Sie `Create project` und wählen Sie im nativen Dialog den **übergeordneten Ordner**. Darin wird `<Projektname>.cutproj` angelegt.
 
-Cutterhoochee erzeugt dabei ein Projektverzeichnis mit der Endung `.cutproj`. Die drei anfänglichen Spuren sind eine Video-, eine Audio- und eine Textspur. Der Name und das Format gehören zur Projektdefinition; wählen Sie sie daher vor dem Aufbau der Timeline bewusst.
+`Back to format` bewahrt die ausgewählte Karte und führt zum ersten Schritt zurück. Wird der Ordnerdialog abgebrochen, bleiben Karte, Name und Framerate im Assistenten erhalten. Wählen Sie Format und Framerate vor dem Import; eine spätere Quelle wird in dieses Projektprofil normalisiert und ändert es nicht.
 
 ### Gespeichertes Projekt öffnen
 
-1. Klicken Sie im Bereich `Continue editing` auf `Open project`.
-2. Wählen Sie das gespeicherte `.cutproj`-Verzeichnis im nativen Dialog.
+1. Klicken Sie im Startbildschirm auf `Open project` oder öffnen Sie bei einem bereits geöffneten Projekt das Projektmenü und wählen Sie `Open project…`.
+2. Wählen Sie im nativen Ordnerdialog das gespeicherte `.cutproj`-Verzeichnis, nicht eine beliebige Mediendatei.
 3. Warten Sie, bis Projektstatus, Bibliothek und Timeline geladen sind.
 
-Unter `Recent projects` erscheinen nach Anlegen, Öffnen oder Import zuletzt verwendete **Projektnamen**. Die Liste speichert keine verlässlichen Wiederöffnungspfade: Auch ein Klick auf einen Namen öffnet den allgemeinen Projektauswahldialog. Merken Sie sich den beim Anlegen gewählten Ordner.
+Eine Liste fingierter letzter Projektnamen gibt es nicht. Jede Aktion `Open project` verwendet den gespeicherten `.cutproj`-Ordnerdialog; merken Sie sich daher den übergeordneten Ordner für späteres Öffnen und Sichern.
 
 Wenn bereits ein Projekt geöffnet ist, weist der Startbildschirm darauf hin, dass Sie zum erneuten Verbinden des Startzustands das Desktop-Fenster aktualisieren sollen. Öffnen Sie nicht gleichzeitig dasselbe Projekt schreibend in mehreren Cutterhoochee-Prozessen.
 
@@ -138,18 +136,17 @@ Wenn bereits ein Projekt geöffnet ist, weist der Startbildschirm darauf hin, da
 
 Nach dem Öffnen eines Projekts ist der Arbeitsbereich in Kopfzeile, linker Werkzeugspalte, zentraler Vorschau mit Timeline und rechter Assistentenspalte gegliedert.
 
-### Kopfzeile
-
 Von links nach rechts finden Sie:
 
-- Cutterhoochee- und Projektnamen sowie den lokalen Speicherstatus, typischerweise `Saved locally`.
+- `Toggle media pane` klappt die linke Werkzeugspalte ein oder aus.
+- Der Projekttitel öffnet ein Projektmenü mit `Open project…`, `Save project` (`Ctrl/Cmd+S`), dem Wechsel des hellen/dunklen Themes, `Provider settings` und `Close project`.
+- `Saved locally` beziehungsweise ein aktueller Statushinweis zeigt den letzten lokalen Speicherstatus.
 - `Undo` und `Redo` für Projekttransaktionen.
-- `Export` zum Öffnen des Exportdialogs. Der Tooltip nennt `Export video (Ctrl/Cmd+E)`.
-- `Toggle theme` zum Wechsel zwischen dunklem und hellem Theme.
-- `Provider settings` zum Konfigurieren optionaler Pi-Anbieter.
-- `Close project` schließt das aktuelle Projekt. `Ctrl/Cmd+S` speichert vorher im bereits beim Anlegen gewählten Projektordner; es öffnet keinen „Speichern unter“-Dialog.
+- `Import` öffnet den nativen Medienauswahldialog (auch mit `Ctrl/Cmd+I`).
+- `Export` öffnet `Export video` (auch mit `Ctrl/Cmd+E`).
+- Der Assistentenschalter blendet mit `Hide assistant` die rechte Spalte aus; `Open assistant` blendet sie wieder ein.
 
-`Saved locally` bezieht sich auf den Projektstand auf diesem Gerät. Es bedeutet nicht, dass ein Cloud-Sync stattfindet.
+`Saved locally` bezieht sich auf den Projektstand auf diesem Gerät. Es bedeutet nicht, dass ein Cloud-Sync stattfindet. Verwenden Sie für wichtige Arbeiten `Save project` und kopieren Sie das Projektverzeichnis erst nach erfolgreichem Speichern.
 
 ### Linke Werkzeugspalte
 
@@ -192,15 +189,13 @@ Unter der Vorschau liegt die Timeline mit:
 
 Ein Clip zeigt bei vorbereitetem Videomaterial eine Thumbnail-Leiste und bei Audio eine Wellenform. `native` kennzeichnet eine aus einem verwalteten Artefakt erzeugte Darstellung. Ein fehlendes Vorschaubild bedeutet nicht automatisch, dass das Original gelöscht wurde.
 
-### Rechte Assistentenspalte
-
 Die rechte Spalte ist als `Assistant chat` ausgeführt. Unten steht das Eingabefeld `Describe an edit...`. Der Assistent kann – je nach verbundenem Anbieter, Modell und ausdrücklicher Evidence-Freigabe – Projektstatus lesen, lokale Evidence anfordern und validierte Projektaktionen vorschlagen oder ausführen. Er erhält nicht automatisch die Originaldatei als Videostream.
 
-Die Spaltenbreiten lassen sich über die sichtbaren `Resize timeline`- und `Resize assistant`-Trenner verändern. Eine eingeklappte rechte Spalte kann über `Open assistant` wieder geöffnet werden.
+Die Spaltenbreiten lassen sich über die sichtbaren `Resize timeline`- und `Resize assistant`-Trenner verändern. `Hide assistant` in der Kopfzeile klappt die rechte Spalte ein; `Open assistant` stellt sie wieder her, ohne die Unterhaltung zu ändern.
 
 ### Theme wechseln
 
-Klicken Sie in der Kopfzeile auf `Toggle theme`. Das Symbol wechselt zwischen Sonne und Mond. Die Einstellung ändert nur die Darstellung des Arbeitsbereichs, nicht Medien, Projektformat oder Exportdaten.
+Klicken Sie im Projektmenü auf den Eintrag zum Wechsel des hellen oder dunklen Themes. Das Symbol wechselt zwischen Sonne und Mond. Die Einstellung ändert nur die Darstellung des Arbeitsbereichs, nicht Medien, Projektformat oder Exportdaten.
 
 ![GIF des echten Arbeitsbereichs beim Wechsel zwischen Themes](assets/theme-switch.gif)
 
@@ -210,11 +205,11 @@ Klicken Sie in der Kopfzeile auf `Toggle theme`. Das Symbol wechselt zwischen So
 
 ## 4. Projektlebenszyklus
 
-### Anlegen, bearbeiten, speichern
+Ein neues Projekt beginnt mit einer leeren Timeline und den anfänglichen Spuren. Legen Sie es über `Start a new project`, die Formatkarte, `Continue to details` und `Name and review your project` an. `Advanced settings` zeigt die Framerate-Auswahl mit `30 fps` als Standard sowie `24 fps`, `25 fps` und `60 fps`. Nach `Create project` wählen Sie den übergeordneten Ordner im nativen Dialog; dort entsteht `<Projektname>.cutproj`.
 
-Ein neues Projekt beginnt mit einer leeren Timeline und den anfänglichen Spuren. Importierte Assets und alle Clips werden in der Projektdefinition referenziert. Jede akzeptierte Bearbeitung wird als neue Revision gespeichert; der sichtbare Status kehrt danach zu `Saved locally` zurück.
+`Back to format` bewahrt die bisher eingegebenen Werte. Wird der Ordnerdialog abgebrochen, bleibt der Assistent mit diesen Werten geöffnet. Importierte Assets und alle Clips werden in der Projektdefinition referenziert. Jede akzeptierte Bearbeitung wird als neue Revision gespeichert; der sichtbare Status kehrt danach zu `Saved locally` zurück.
 
-Speichern Sie zusätzlich bewusst mit `Ctrl/Cmd+S`, insbesondere vor größeren Umstrukturierungen, vor dem Beenden und vor einer Sicherung. `Ctrl+S` gilt unter Linux und Windows, `Cmd+S` unter macOS.
+Speichern Sie zusätzlich bewusst mit `Ctrl/Cmd+S` oder über `Save project` im Projektmenü, insbesondere vor größeren Umstrukturierungen, vor dem Beenden und vor einer Sicherung. `Ctrl+S` gilt unter Linux und Windows, `Cmd+S` unter macOS.
 
 ### Öffnen und fortsetzen
 
@@ -225,7 +220,7 @@ Zum Fortsetzen:
 3. Klicken Sie die relevanten Clips an und kontrollieren Sie im `Inspector` Quelle, Timing und Audio.
 4. Springen Sie in der Timeline an die zuletzt bearbeitete Position.
 
-Die lokale Liste `Recent projects` speichert Namen, nicht den Projektinhalt. Ein vollständiges Projekt enthält verwaltete Medienkopien: Sind diese intakt, bleiben Bearbeitung, Vorschau und Export möglich, auch wenn eine ursprüngliche Quelldatei verschoben wurde. `Relink` wird zur Wiederherstellung fehlender benötigter Medienartefakte benötigt, nicht pauschal nach jedem Umzug.
+Es gibt keine Liste fingierter letzter Projektnamen. `Open project` öffnet immer den nativen Ordnerdialog; ein vollständiges Projekt enthält verwaltete Medienkopien. Sind diese intakt, bleiben Bearbeitung, Vorschau und Export möglich, auch wenn eine ursprüngliche Quelldatei verschoben wurde. `Relink` wird zur Wiederherstellung fehlender benötigter Medienartefakte benötigt, nicht pauschal nach jedem Umzug.
 
 ### Revision und Konflikte
 
@@ -252,19 +247,19 @@ Beenden Sie Cutterhoochee oder stellen Sie sicher, dass gerade nicht geschrieben
 
 ### Unterstützte Importarten
 
-Der Startbildschirm bewirbt `Video, audio, PNG, JPEG, or WebP`. Die native Medienprüfung akzeptiert außerdem eine begrenzte FFmpeg-Demuxer-/Protokollmenge, darunter gängige Container und Audioquellen wie MOV/MP4-verwandte Quellen, Matroska, AVI, MPEG-TS, MPEG, FLV, OGG, MP3, WAV, FLAC und AAC sowie Bildquellen. Ob eine konkrete Datei decodierbar ist, hängt zusätzlich von ihren tatsächlich enthaltenen Streams und dem gebündelten nativen FFmpeg ab.
+Die native Medienprüfung akzeptiert standalone lokale Medien aus einer begrenzten Allowlist von Demuxern und tatsächlich decodierbaren Streams, darunter gängige Video-/Container-, Audio- und Bildquellen. Ob eine konkrete Datei decodierbar ist, hängt zusätzlich von ihren enthaltenen Streams und dem gebündelten nativen FFmpeg ab.
 
-Bei einer Meldung über ein nicht unterstütztes Medium oder einen nicht erlaubten Demuxer kann die Datei nicht verarbeitet werden. Benennen Sie sie nicht lediglich um; verwenden Sie gegebenenfalls eine kompatible, lokal erzeugte Kopie.
+Bei einer Meldung über ein nicht unterstütztes Medium oder einen nicht erlaubten Demuxer kann die Datei nicht verarbeitet werden. Benennen Sie sie nicht lediglich um; verwenden Sie gegebenenfalls eine kompatible, lokal erzeugte Kopie. Playlists und Netzwerkmedien wie HLS, DASH, Concat-/Segment-Listen, HTTP oder RTSP sind keine standalone Importquellen.
 
 ### Import über die Oberfläche
 
 Sie können Medien auf drei Wegen importieren:
 
-1. Klicken Sie auf `Import media` im Startbildschirm oder im Tab `Media`.
+1. Klicken Sie im geöffneten Projekt oben auf `Import` oder im Tab `Media` auf `Import media`.
 2. Drücken Sie `Ctrl/Cmd+I` außerhalb eines Eingabefelds.
-3. Ziehen Sie Dateien auf `Drop media to import` im Startbildschirm beziehungsweise in den vorgesehenen Medienbereich.
+3. Legen Sie externe native Video-, Foto- oder Audiodateien überall im Desktop-Fenster ab.
 
-Der native Dateidialog beziehungsweise die native Dateifreigabe legt fest, welche Dateien Cutterhoochee lesen darf. Ein Import ohne eine gültige Dateifreigabe wird nicht durch einen frei eingegebenen Pfad umgangen.
+Der native Dateidialog beziehungsweise die native Dateifreigabe legt fest, welche Dateien Cutterhoochee lesen darf. Bei einem Drop autorisiert die native Laufzeit genau die abgelegten Pfade; bestätigen Sie nur die angezeigte Dateifreigabe, falls eine Anfrage erscheint. Ein Browser-Drop oder ein frei eingegebener Pfad umgeht diese Autorisierung nicht.
 
 > **Achtung – Dateizugriff:** Wählen Sie nur die Dateien und Verzeichnisse aus, die Sie wirklich verwenden möchten. Eine Importfreigabe ist keine pauschale Berechtigung für das gesamte Dateisystem.
 
@@ -323,7 +318,7 @@ Entfernen Sie zuerst alle Clips, die auf das Asset verweisen. Erst dann wird `Re
 
 Eine neue Projektdefinition enthält die Spuren `Main Video`, `Main Audio` und `Text`. Weitere sichtbare Spurennamen können aus dem jeweiligen Projekt stammen. Jede Spur hat eine eigene Zeile und eigene Schalter:
 
-- `Mute` beziehungsweise `Unmute` ändert den gespeicherten Spurstatus. **Aktuelle Einschränkung: Dieser Status wird im Renderplan nicht ausgewertet und ist daher keine verlässliche Stummschaltung für Vorschau oder Export.**
+- `Mute` beziehungsweise `Unmute` schaltet den Audiobeitrag der Spur für Vorschau und Export ein oder aus. Bei einer Videospur bleibt das Bild sichtbar; nur ihr Ton wird stummgeschaltet.
 - `Lock` beziehungsweise `Unlock` schützt die Spur vor Bearbeitung.
 - Der Status zeigt `Locked`, `Muted` oder `Active`.
 
@@ -379,7 +374,7 @@ Für framegenaues Trimmen ist der Tab `Inspector` zuverlässiger als ein ungenau
 
 ### Audiospuren und Sperren
 
-`Lock` schützt die Spur vor Bearbeitung. Verlassen Sie sich für Vorschau oder Export nicht auf `Mute`: Der aktuelle Renderplan berücksichtigt diesen Spurstatus nicht. Für Video-Ton können Sie `Clip audio` am Videoclip deaktivieren. Bei reinen Audioclips wird auch deren `Clip audio`-Schalter derzeit nicht zum Ausschluss aus dem Renderplan verwendet; entfernen Sie einen nicht benötigten Audioclip aus einer bewusst gesicherten Arbeitskopie und prüfen Sie den Export.
+`Lock` schützt die Spur vor Bearbeitung. `Mute` schaltet den Audiobeitrag der gesamten Spur in Vorschau und Export stumm; bei einer stummgeschalteten Videospur bleibt das Bild sichtbar. Mit `Clip audio` deaktivieren Sie den Ton des ausgewählten Video- oder Audioclips.
 
 ---
 
@@ -422,12 +417,12 @@ Audio wird beim Import auf eine gemeinsame normalisierte Basis gebracht. Bereite
 Für einen einzelnen Clip:
 
 1. Wählen Sie den Clip und öffnen Sie `Inspector`.
-2. Für den Ton eines Videoclips können Sie im Abschnitt `Audio` `Clip audio` aktivieren oder deaktivieren. Bei Clips auf Audiospuren ist dieser Schalter derzeit kein wirksamer Audioausschluss.
+2. Für den Ton eines Video- oder Audioclips können Sie im Abschnitt `Audio` `Clip audio` aktivieren oder deaktivieren.
 3. Ändern Sie `Gain · dB` innerhalb des unterstützten Bereichs `-60` bis `12` dB.
 4. Setzen Sie `Fade in` und `Fade out` als Frameanzahl.
 5. Spielen Sie den betroffenen Bereich erneut ab.
 
-Der Schalter `Clip audio` ist für Videoclip-Ton wirksam. Bei Clips auf Audiospuren und beim Spurstatus `Mute` besteht die oben beschriebene Render-Einschränkung. `Gain · dB` und Fades beeinflussen den Pegel, sind aber kein Ersatz für einen garantierten Audioausschluss. Prüfen Sie die fertige Ausgabe hörbar.
+Der Schalter `Clip audio` gilt für Video- und Audioclips. `Mute` schaltet den Audiobeitrag der gesamten Spur in Vorschau und Export stumm; bei einer stummgeschalteten Videospur bleibt das Bild sichtbar. `Gain · dB` und Fades beeinflussen den Pegel. Prüfen Sie die fertige Ausgabe hörbar.
 
 ---
 
@@ -436,6 +431,7 @@ Der Schalter `Clip audio` ist für Videoclip-Ton wirksam. Bei Clips auf Audiospu
 ### Clip-Inspector
 
 Wählen Sie einen Videoclip, Audioclip oder Bildclip und öffnen Sie den Tab `Inspector`. Die verfügbaren Gruppen sind:
+Die verfügbaren Gruppen hängen vom Spurtyp ab: `Canvas` und `Transitions` gelten für Clips auf Videospuren; `Audio` gilt für Clips auf Video- und Audiospuren.
 
 #### `Timing`
 
@@ -448,22 +444,28 @@ Wählen Sie einen Videoclip, Audioclip oder Bildclip und öffnen Sie den Tab `In
 
 #### `Canvas`
 
+Bei einem Clip auf einer Videospur bietet der Abschnitt `Canvas`:
+
 - `Fit`: `Contain` bewahrt den gesamten Inhalt innerhalb des Canvas; `Cover` füllt den Canvas und kann Bildbereiche abschneiden.
 - `X · bp` und `Y · bp`: Mittelpunktposition in Basispunkten von `0` bis `10000`; `5000` liegt jeweils in der Mitte der Projektfläche.
 - `Scale · bp`: Skalierung von `100` bis `40000`; `10000` entspricht 100 %, `5000` entspricht 50 % der eingepassten Größe.
 - `Opacity · bp`: Deckkraft von `0` (unsichtbar) bis `10000` (vollständig deckend); `5000` entspricht 50 %.
 
-Bearbeiten Sie Positionen mit Bedacht, besonders bei `Portrait · 9:16`: Eine im Querformat gut sichtbare Position kann im Hochformat außerhalb des sicheren sichtbaren Bereichs liegen.
+Bearbeiten Sie Positionen mit Bedacht, besonders bei `Vertical video` (`9:16`): Eine im Querformat gut sichtbare Position kann im Hochformat außerhalb des sicheren sichtbaren Bereichs liegen.
 
 #### `Audio`
 
-- `Clip audio`: Video-Ton an- oder ausschalten; bei Clips auf Audiospuren wird dieser Schalter derzeit nicht als Audioausschluss ausgewertet.
+Bei einem Clip auf einer Video- oder Audiospur bietet der Abschnitt `Audio`:
+
+- `Clip audio`: Ton des ausgewählten Video- oder Audioclips an- oder ausschalten.
 - `Gain · dB`: Clipverstärkung beziehungsweise -absenkung.
 - `Fade in` und `Fade out`: Ein-/Ausblenddauer in Frames.
 
 Standbilder und Videos ohne Audiostream können kein Clip-Audio aktivieren.
 
 #### `Transitions`
+
+Der Abschnitt `Transitions` steht für Clips auf Videospuren zur Verfügung.
 
 Cutterhoochee stellt den verifizierten Übergang `Dissolve` bereit. Er verbindet zwei aufeinanderfolgende Clips einer Videospur. Die Dauer muss mindestens zwei Frames betragen und kürzer als die Dauer beider beteiligten Clips sein.
 
@@ -605,6 +607,12 @@ Der rechte Bereich verwendet Pi als Assistenten-Harness. Formulieren Sie eine Bi
 
 Der Assistent soll seine Aktionen auf validierte Projektoperationen abbilden. Bei unklarer Auswahl, einer veralteten Revision oder einer fehlenden Quelle kann die native Schicht die Aktion ablehnen. Prüfen Sie die Timeline danach trotzdem selbst.
 
+**Activity → Native work** zeigt native Aktionen, betroffene Ziele, bestätigte Projektänderungen, wartende Freigaben und Hintergrundaufträge. Nicht abgeschlossene Vorgänge und fehlgeschlagene Rückmeldungen bleiben standardmäßig sichtbar; abgeschlossene und abgebrochene Einträge liegen hinter `Show history (N)`, das den Aktivitätsverlauf aufklappt. Eine Job-ID bedeutet, dass Arbeit gestartet wurde, nicht dass sie abgeschlossen ist. **Cancel** fordert einen Abbruch an; Endzustand und Fehler stammen vom nativen Auftrag. **Stop** macht bereits bestätigte Änderungen nicht rückgängig.
+
+Aktivitätshervorhebungen sind von Ihrer Auswahl getrennt. Lesezugriffe markieren untersuchte Ziele kurz; bestätigte Änderungen können den betroffenen Bereich, die vorherige Clipposition oder Vorher-/Nachher-Werte im Inspector zeigen. Dry Runs zeigen keine Animation einer bestätigten Änderung. Große Änderungen werden mit begrenzten Hervorhebungen gebündelt. **Show** macht ein Ziel außerhalb der Ansicht ausdrücklich auffindbar, ohne es auszuwählen oder die Wiedergabe zu starten. Aktivität allein übernimmt nicht Fokus, Scrollposition oder Playhead; Einstellungen für reduzierte Bewegung werden respektiert.
+
+Ausdrückliche Wiedergabe-, Pause- und Seek-Aufträge des Assistenten verwenden den sichtbaren Player und warten auf dessen Bestätigung. Untersuchen und andere reine Lesezugriffe starten die Wiedergabe nicht neu. Eine bestätigte Zeitbereichsauswahl bleibt sichtbar, bis eine andere Auswahl sie ersetzt. Prüfen Sie vor einem erneuten Versuch die tatsächliche Revision und das native Ergebnis: Ein späterer Abbruch bedeutet nicht, dass eine frühere Änderung zurückgerollt wurde.
+
 ### Evidence und direkte Videodaten
 
 Ein Sprachmodell erhält nicht automatisch das native Videomedium. Pi kann lokale, vom Projekt erzeugte Evidence anfordern, beispielsweise:
@@ -707,7 +715,7 @@ Der Dialog zeigt H.264/AAC und die Framerate des Projektprofils. Die verfügbare
 - `1080p` mit der zum Aspect passenden Abmessung,
 - `720p` mit der zum Aspect passenden Abmessung.
 
-Für `Portrait · 9:16` führt `1080p` beispielsweise zu `1080 × 1920`; für `Landscape · 16:9` zu einer entsprechenden Querformatgröße.
+Für `Vertical video` (`9:16`) führt `1080p` beispielsweise zu `1080 × 1920`; für `Landscape` (`16:9`) zu einer entsprechenden Querformatgröße.
 
 ### Export starten
 
@@ -759,7 +767,7 @@ Die folgenden globalen Tastenkürzel sind in der Oberfläche implementiert. Sie 
 | `Shift+Delete` | Markierte Range mit Ripple entfernen | Ohne gültige Range werden stattdessen die ausgewählten Clips gelöscht. |
 | `Ctrl/Cmd+Z` | `Undo` | Projekttransaktion rückgängig machen. |
 | `Ctrl/Cmd+Shift+Z` | `Redo` | Zuvor rückgängig gemachte Projekttransaktion wiederholen. |
-| `Ctrl/Cmd+I` | `Import media` öffnen | Native Dateifreigabe erforderlich. |
+| `Ctrl/Cmd+I` | `Import` öffnen | Native Dateifreigabe erforderlich. |
 | `Ctrl/Cmd+S` | Projekt speichern | Speichert lokal; kein Cloud-Sync. |
 | `Ctrl/Cmd+E` | `Export video` öffnen | Startet den Export erst nach Auswahl im Dialog. |
 
@@ -784,12 +792,13 @@ Dieses Tutorial verwendet absichtlich erzeugtes Testmaterial. Sie können Ihre e
 ### 13.1 Projekt anlegen
 
 1. Starten Sie Cutterhoochee und prüfen Sie `Desktop ready`.
-2. Geben Sie unter `Project name` `Sommergruß` ein.
-3. Wählen Sie `Portrait · 9:16`.
-4. Lassen Sie `30 fps` eingestellt.
-5. Klicken Sie `Create project`.
-6. Prüfen Sie, dass `Main Video`, `Main Audio` und `Text` in der Timeline erscheinen.
-
+2. Klicken Sie im Startbildschirm auf `Start a new project`.
+3. Wählen Sie unter `Choose a visual format` die Karte `Vertical video` (`9:16`, `1080 × 1920`) für `Shorts · Reels · TikTok`.
+4. Klicken Sie `Continue to details`.
+5. Tragen Sie unter `Name and review your project` `Sommergruß` als `Project name` ein.
+6. Lassen Sie `Advanced settings` geschlossen und prüfen Sie die standardmäßige `Frame rate` `30 fps`.
+7. Klicken Sie `Create project`, wählen Sie den übergeordneten Ordner im nativen Dialog und merken Sie sich den Pfad zu `Sommergruß.cutproj`.
+8. Prüfen Sie, dass `Main Video`, `Main Audio` und `Text` in der Timeline erscheinen.
 ### 13.2 Video und Ton importieren
 
 1. Drücken Sie `Ctrl/Cmd+I`.
@@ -800,7 +809,7 @@ Dieses Tutorial verwendet absichtlich erzeugtes Testmaterial. Sie können Ihre e
 6. Fügen Sie das Audioasset auf `Main Audio` ein.
 7. Spielen Sie einen kurzen Bereich ab und kontrollieren Sie in `Inspector`, ob `Clip audio` beim Videoclip wie gewünscht aktiv ist.
 
-Wenn Ihr Video bereits passenden Ton enthält, vermeiden Sie eine doppelte Tonspur: Deaktivieren Sie `Clip audio` am Videoclip, wenn die separate Audiospur verwendet werden soll. Verlassen Sie sich nicht auf Spur-`Mute` oder den `Clip audio`-Schalter eines reinen Audioclips; diese Zustände werden im aktuellen Renderplan nicht als Stummschaltung berücksichtigt.
+Wenn Ihr Video bereits passenden Ton enthält, vermeiden Sie eine doppelte Tonspur: Deaktivieren Sie `Clip audio` am Videoclip, wenn die separate Audiospur verwendet werden soll. `Mute` schaltet den Audiobeitrag einer Spur in Vorschau und Export stumm; bei einer stummgeschalteten Videospur bleibt das Bild sichtbar. `Clip audio` funktioniert ebenso für den Ton eines reinen Audioclips.
 
 ### 13.3 Schnitt und Gestaltung
 
@@ -868,9 +877,9 @@ Vergeben Sie keine Provider- oder Systemberechtigung nur deshalb, weil Pi eine A
 
 ## 14. Fehlerbehebung
 
-### Startbildschirm zeigt `Browser preview · native required`
+### Startbildschirm zeigt `Browser preview · desktop required`
 
-Die Weboberfläche ist geladen, aber die native Bridge ist nicht verfügbar. Starten Sie die verifizierte Linux-x64-AppImage-Datei als Desktop-Anwendung erneut. Verwenden Sie keine Browser-URL als Ersatz für die nativen Projekt-, Datei- und Exportaktionen.
+Die Weboberfläche ist geladen, aber die native Desktop-Bridge ist nicht verfügbar. Starten Sie die verifizierte Linux-x64-AppImage-Datei als Desktop-Anwendung erneut. Verwenden Sie keine Browser-URL als Ersatz für die nativen Projekt-, Datei- und Exportaktionen.
 
 ### AppImage startet, aber das Desktopfenster bleibt leer
 
@@ -885,7 +894,7 @@ Die Linux-Qualifikation wurde auf NVIDIA-Hardware durchgeführt; ein systemweite
 
 ### `Media import was cancelled`
 
-Der native Dialog wurde geschlossen oder es wurde keine Datei ausgewählt. Starten Sie `Import media` erneut und bestätigen Sie eine Datei. Bei einem manuellen Drag-and-drop müssen die Pfade vom Desktop an die native Bridge übergeben werden können.
+Der native Dialog wurde geschlossen oder es wurde keine Datei ausgewählt. Starten Sie `Import` oder `Import media` erneut und bestätigen Sie eine Datei. Externe native Video-, Foto- oder Audiodateien können Sie auch überall in das Desktop-Fenster ziehen; die native Bridge autorisiert dabei genau die abgelegten Pfade.
 
 ### Ein Medium wird als nicht unterstützt abgelehnt
 
@@ -931,8 +940,8 @@ Der Playhead muss innerhalb des ausgewählten Clips liegen. Bei einem vorhandene
 
 Prüfen Sie in dieser Reihenfolge:
 
-1. Verlassen Sie sich nicht auf `Mute` als Audio-Prüfschalter: Der aktuelle Renderplan ignoriert diesen Spurstatus.
-2. Ist `Clip audio` beim Videoclip eingeschaltet, falls dessen Ton gewünscht ist? Der gleichnamige Schalter auf reinen Audioclips schließt deren Ton derzeit nicht aus.
+1. Prüfen Sie, ob die betreffende Spur stummgeschaltet ist. `Mute` schaltet ihren Audiobeitrag in Vorschau und Export stumm; bei einer Videospur bleibt das Bild sichtbar.
+2. Ist `Clip audio` beim Video- oder Audioclip eingeschaltet, falls dessen Ton gewünscht ist?
 3. Liegt `Gain · dB` nicht auf einer ungewollten Absenkung?
 4. Sind `Fade in`/`Fade out` länger als der hörbare Teil?
 5. Ist im Projekt ein Audioasset mit normalisiertem Audio vorhanden?
@@ -1061,9 +1070,9 @@ Bevor Sie fremde Video-/Audioinhalte importieren, transkribieren, als Frame-Evid
 - **UI-Sprache:** Die UI ist Englisch. Eine deutsche Lokalisierung der Controls wird nicht behauptet.
 - **Native Bridge:** Für Projekt-, Datei-, Medien-, Transkriptions- und Exportaktionen ist die native Desktop-Anbindung erforderlich.
 - **Medienformate:** Der native Import ist auf eine Allowlist von Demuxern/Protokollen und die tatsächlich vorhandenen decodierbaren Streams begrenzt.
-- **Projektprofile:** Die Startoberfläche bietet 16:9, 9:16 und 1:1 sowie 24, 25, 30 und 60 fps (die zusätzlichen Frameraten erscheinen unter `Advanced format options`).
+- **Projektprofile:** Die Startoberfläche bietet die Karten `Vertical video` (9:16, 1080 × 1920), `Landscape` (16:9, 1920 × 1080) und `Square` (1:1, 1080 × 1080) sowie 24, 25, 30 und 60 fps (`30 fps` als Standard, weitere Werte unter `Advanced settings`).
 - **Audio:** Normalisiertes Audio ist für die lokale Transkription erforderlich; Standbilder besitzen kein Clip-Audio.
-- **Stummschaltung:** Track-`Mute` wird derzeit nicht im Renderplan ausgewertet. `Clip audio` deaktiviert Video-Ton, schließt jedoch Ton von Clips auf Audiospuren nicht aus. Verlassen Sie sich für eine stumme Ausgabe nicht auf diese unwirksamen Zustände; prüfen Sie den finalen Export.
+- **Stummschaltung:** Track-`Mute` schaltet den Audiobeitrag dieser Spur in Vorschau und Export stumm; bei einer Videospur bleibt das Bild sichtbar. `Clip audio` deaktiviert den Ton sowohl von Video- als auch von Audioclips.
 - **Übergänge:** Der verifizierte Übergang ist `Dissolve` auf Videospuren mit zwei passenden Clips. Vor dem Split muss er entfernt werden.
 - **Untertitel:** Transcript-Captions und SRT-Import sind verfügbar; SRT muss UTF-8, <= 5 MiB und strikt nicht überlappend sein.
 - **Sprachmodell:** Lokale automatische Transkription benötigt einen einwilligungsgebundenen Download des mehrsprachigen Modells. Ohne diesen Download bleiben SRT-Import, Bearbeitung importierter Captions und manuelle Titel verfügbar.

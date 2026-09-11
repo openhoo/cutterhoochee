@@ -308,9 +308,9 @@ jobs:
           pacman -S --needed --noconfirm \
             base-devel ca-certificates curl git jq nodejs npm rustup \
             clang cmake ninja openssl pkgconf patchelf \
-            webkit2gtk-4.1 libappindicator-gtk3 librsvg \
+            webkit2gtk-4.1 libappindicator-gtk3 librsvg libheif \
             gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
-            pipewire vulkan-headers ffmpeg x264
+            pipewire vulkan-headers ffmpeg x264 xdg-utils
           test "$(pacman -Q ffmpeg)" = 'ffmpeg 2:9.0.1-1'
           test "$(pacman -Q x264)" = 'x264 3:0.165.r3222.b35605a-2'
       - name: Checkout immutable release tag
@@ -318,6 +318,8 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight.outputs.commit }}
+      - name: Trust the container-mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Select the repository Rust toolchain
         run: |
           set -euo pipefail

@@ -129,14 +129,17 @@ function drawRaster(
  */
 export class CanvasComposer {
   private plan: RenderPlan | undefined;
+  private layers: readonly RenderLayer[] = [];
   private leftLayer: PixelCanvas | undefined;
   private rightLayer: PixelCanvas | undefined;
   private transitionLayer: PixelCanvas | undefined;
+  private transitionOutput: ImageData | undefined;
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
   setPlan(plan: RenderPlan): void {
     this.plan = plan;
+    this.layers = [...plan.layers].sort((left, right) => left.order - right.order);
     if (this.canvas.width !== plan.width || this.canvas.height !== plan.height) {
       this.canvas.width = plan.width;
       this.canvas.height = plan.height;
@@ -144,6 +147,7 @@ export class CanvasComposer {
     this.leftLayer = undefined;
     this.rightLayer = undefined;
     this.transitionLayer = undefined;
+    this.transitionOutput = undefined;
   }
 
   drawFrame(
@@ -169,8 +173,7 @@ export class CanvasComposer {
     const missingVideoKeys: string[] = [];
     const missingRasterIds: string[] = [];
     let overlayWarningDrawn = false;
-    const layers = [...plan.layers].sort((left, right) => left.order - right.order);
-    for (const layer of layers) {
+    for (const layer of this.layers) {
       this.drawLayer(layer, frame, videos, rasters, context, missingVideoKeys, missingRasterIds, () => {
         overlayWarningDrawn = true;
       });
@@ -191,11 +194,12 @@ export class CanvasComposer {
     markWarning: () => void,
   ): void {
     const activeSegments = layer.segments.filter((segment) => isActive(segment, frame));
+    const activeByClipId = new Map(activeSegments.map((segment) => [segment.clipId, segment]));
     const drawn = new Set<string>();
     for (const transition of layer.transitions) {
       if (!activeTransition(transition, frame)) continue;
-      const left = activeSegments.find((segment) => segment.clipId === transition.leftClipId);
-      const right = activeSegments.find((segment) => segment.clipId === transition.rightClipId);
+      const left = activeByClipId.get(transition.leftClipId);
+      const right = activeByClipId.get(transition.rightClipId);
       if (!left || !right) continue;
       drawn.add(left.clipId);
       drawn.add(right.clipId);
@@ -272,7 +276,10 @@ export class CanvasComposer {
     drawImageRect(rightLayer.context, rightSource, right.sourceRect, right.destRect, right.opacity);
     const leftPixels = leftLayer.context.getImageData(0, 0, width, height);
     const rightPixels = rightLayer.context.getImageData(0, 0, width, height);
-    const output = transitionLayer.context.createImageData(width, height);
+    const output = this.transitionOutput && this.transitionOutput.width === width && this.transitionOutput.height === height
+      ? this.transitionOutput
+      : transitionLayer.context.createImageData(width, height);
+    this.transitionOutput = output;
     const progress = clampUnit((frame - transition.startFrame) / transition.durationFrames);
     const leftWeight = 1 - progress;
     const rightWeight = progress;
@@ -320,8 +327,10 @@ export class CanvasComposer {
 
   dispose(): void {
     this.plan = undefined;
+    this.layers = [];
     this.leftLayer = undefined;
     this.rightLayer = undefined;
     this.transitionLayer = undefined;
+    this.transitionOutput = undefined;
   }
 }

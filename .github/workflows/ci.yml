@@ -126,7 +126,7 @@ jobs:
           set -euo pipefail
           pnpm build:agent
           pnpm build:web
-      - name: Run UI unit tests
+      - name: Run UI and agent unit tests
         run: pnpm test:unit
 
   native:
@@ -154,15 +154,17 @@ jobs:
           pacman -S --needed --noconfirm \
             base-devel ca-certificates curl git jq nodejs npm rustup \
             clang cmake ninja openssl pkgconf patchelf \
-            webkit2gtk-4.1 libappindicator-gtk3 librsvg \
+            webkit2gtk-4.1 libappindicator-gtk3 librsvg libheif \
             gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
-            pipewire vulkan-headers ffmpeg x264
+            pipewire vulkan-headers ffmpeg x264 xdg-utils
           test "$(pacman -Q ffmpeg)" = 'ffmpeg 2:9.0.1-1'
           test "$(pacman -Q x264)" = 'x264 3:0.165.r3222.b35605a-2'
       - name: Checkout immutable revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Trust the container-mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Select the repository Rust toolchain
         run: |
           set -euo pipefail
@@ -199,3 +201,5 @@ jobs:
           test -f "$appimage"
           test -x "$appimage"
           bash scripts/release/verify-appimage.sh "$appimage" "$version"
+      - name: Verify optimized glib string iterator safety
+        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --test glib_variant_str_iter

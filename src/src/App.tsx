@@ -14,8 +14,10 @@ import {
   type SoftwarePreviewTransport,
   type TimelineSnapshot,
 } from "@cutterhoochee/shared";
-import { StartScreen, Workspace, type Theme } from "@/components/Workspace";
+import { Workspace, type Theme } from "@/components/Workspace";
+import { ProjectStartScreen } from "@/components/ProjectStartScreen";
 import { callNative, parseEvent } from "@/lib/native";
+import { NativeDropOverlay, useNativeDropFeedback } from "@/components/NativeDropFeedback";
 const SOFTWARE_PREVIEW_START_TIMEOUT_MS = 5_000;
 
 type NativeInvoke = <T>(
@@ -318,6 +320,9 @@ export function App() {
   const loadSequence = useRef(0);
   const statusRef = useRef(status);
   const snapshotRef = useRef(snapshot);
+  const nativeDrop = useNativeDropFeedback({
+    projectOpen: status.open,
+  });
   statusRef.current = status;
   snapshotRef.current = snapshot;
 
@@ -386,9 +391,18 @@ export function App() {
     void listen<unknown>("cutterhoochee://event", ({ payload }) => {
       if (disposed) return;
       const event = parseEvent(payload);
+      if (!event) return;
+      nativeDrop.handleNativeEvent(event);
+      const eventKind = event.kind.toLowerCase();
+      if (eventKind === "media_job_completed" || eventKind === "media_job_failed" || eventKind === "media_job_cancelled") {
+        const context = client.getContext();
+        if (event.generation === context.generation && event.projectId === context.projectId) {
+          void refresh().catch(() => undefined);
+        }
+        return;
+      }
       if (
-        !event ||
-        event.kind.toLowerCase() !== "project_changed" ||
+        eventKind !== "project_changed" ||
         !Object.prototype.hasOwnProperty.call(event, "projectId") ||
         event.generation === undefined ||
         !Number.isSafeInteger(event.generation) ||
@@ -448,7 +462,7 @@ export function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [client, refresh]);
+  }, [client, nativeDrop.handleNativeEvent, refresh]);
 
   useEffect(() => {
     let mounted = true;
@@ -482,10 +496,16 @@ export function App() {
     setStatus({ generation: context.generation, open: false });
   }, [client]);
 
-  if (loadingProject) return <div className="loading-shell"><Loader2 className="spin" aria-hidden="true" /><span>Opening project…</span></div>;
   const connectionBadge: "connected" | "unavailable" = connection === "connected" ? "connected" : "unavailable";
-  if (status.open && snapshot) return <Workspace key={`${status.generation}:${status.projectId ?? ""}:${snapshot.workspaceId}`} client={client} status={status} snapshot={snapshot} timeline={timeline} connection={connectionBadge} theme={theme} onThemeChange={setTheme} onRefresh={refresh} onProjectStatus={setStatus} onProjectSnapshot={setSnapshot} onTimeline={setTimeline} onClose={closeProject} onOpenProject={openProject} />;
-  return <StartScreen client={client} status={status} connection={connectionBadge} theme={theme} onThemeChange={setTheme} onProjectReady={createOrOpen} />;
+  const page = loadingProject
+    ? <div className="loading-shell"><Loader2 className="spin" aria-hidden="true" /><span>Opening project…</span></div>
+    : status.open && snapshot
+      ? <Workspace key={`${status.generation}:${status.projectId ?? ""}:${snapshot.workspaceId}`} client={client} status={status} snapshot={snapshot} timeline={timeline} connection={connectionBadge} theme={theme} onThemeChange={setTheme} onRefresh={refresh} onProjectStatus={setStatus} onProjectSnapshot={setSnapshot} onTimeline={setTimeline} onClose={closeProject} onOpenProject={openProject} />
+      : <ProjectStartScreen client={client} status={status} connection={connectionBadge} theme={theme} onThemeChange={setTheme} onProjectReady={createOrOpen} />;
+  return <>
+    {page}
+    <NativeDropOverlay state={nativeDrop.state} onDismiss={nativeDrop.dismiss} />
+  </>;
 }
 
 function readTheme(): Theme {

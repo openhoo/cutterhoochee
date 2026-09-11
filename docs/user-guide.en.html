@@ -27,8 +27,8 @@
 <h2 id="1-overview">1. Overview</h2>
 <p>Cutterhoochee combines a project document, a normalized media library, a frame-based timeline, a native preview/export renderer, local speech evidence, and an optional Pi-powered assistant. The normal working loop is:</p>
 <ol>
-<li>Create or open a <code>.cutproj</code> project.</li>
-<li>Import video, audio, or still images through the native file dialog (or drop files onto <strong>Drop media to import</strong>).</li>
+<li>Start a new project through the two-step wizard, or open a saved <code>.cutproj</code> folder.</li>
+<li>Import video, audio, or still images through a native chooser, or drop external native files anywhere in the desktop window.</li>
 <li>Wait for each asset to finish media preparation.</li>
 <li>Add prepared assets to a video or audio track.</li>
 <li>Edit clips, titles, transitions, audio properties, and captions in the timeline and <strong>Inspector</strong>.</li>
@@ -80,33 +80,39 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <p>The start screen shows a badge in the top bar:</p>
 <ul>
 <li><strong>Desktop ready</strong> means the native bridge is available for the desktop operations described in this guide.</li>
-<li><strong>Browser preview · native required</strong> means the UI is running without the native bridge. You may inspect the interface, but native dialogs, imports, project persistence, normalized media, export, and native provider/permission operations are not available there.</li>
+<li><strong>Browser preview · desktop required</strong> means the UI is running without the native desktop bridge. You may inspect the interface, but native dialogs, imports, project persistence, normalized media, export, and native provider/permission operations are not available there.</li>
 </ul>
-<p>If the badge remains <strong>Browser preview · native required</strong> after launching the AppImage, close that window and start the actual AppImage rather than a browser development preview. A blank or missing native bridge is not fixed by retrying an import in the browser.</p>
+<p>If the badge remains <strong>Browser preview · desktop required</strong> after launching the AppImage, close that window and start the actual AppImage rather than a browser development preview. A missing desktop bridge is not fixed by retrying an import in the browser.</p>
 <h3 id="23-choose-a-project-format">2.3 Choose a project format</h3>
-<p>On the start screen, <strong>New project</strong> provides:</p>
+<p>On the start screen, click <strong>Start a new project</strong>. The setup is a two-step wizard:</p>
+<ol>
+<li>On <strong>Choose a visual format</strong>, select one of the visual format cards:
 <ul>
-<li><strong>Project name</strong> — defaults to <code>Untitled project</code> if left empty.</li>
-<li><strong>Aspect</strong> — <strong>Landscape · 16:9</strong>, <strong>Portrait · 9:16</strong>, or <strong>Square · 1:1</strong>.</li>
-<li><strong>Frame rate</strong> — <strong>30 fps</strong> by default. Expand <strong>Advanced format options</strong> to choose <strong>24 fps</strong>, <strong>25 fps</strong>, or <strong>60 fps</strong>.</li>
-<li><strong>Create project</strong> — opens a native parent-folder chooser and creates <code>&lt;project-name&gt;.cutproj</code> inside the chosen folder.</li>
+<li><strong>Vertical video</strong> — <strong>9:16</strong>, <strong>1080 × 1920</strong>, for <strong>Shorts · Reels · TikTok</strong>.</li>
+<li><strong>Landscape</strong> — <strong>16:9</strong>, <strong>1920 × 1080</strong>, for <strong>YouTube · film</strong>.</li>
+<li><strong>Square</strong> — <strong>1:1</strong>, <strong>1080 × 1080</strong>, for <strong>Social posts</strong>.</li>
 </ul>
-<p>Choose the aspect and frame rate before importing. The native project profile supports exactly 16:9, 9:16, or 1:1 dimensions and 24/1, 25/1, 30/1, or 60/1 frame rates. A later source file is normalized into this profile; it does not change the project’s frame rate.</p>
+</li>
+<li>Click <strong>Continue to details</strong>.</li>
+<li>On <strong>Name and review your project</strong>, enter <strong>Project name</strong>. The field starts with <code>Untitled project</code>, but a non-empty name is required.</li>
+<li><strong>Advanced settings</strong> is optional. Open it to review <strong>Frame rate</strong>; <strong>30 fps</strong> is selected by default, with <strong>24 fps</strong>, <strong>25 fps</strong>, and <strong>60 fps</strong> also available.</li>
+<li>Review the format, dimensions, and frame rate, click <strong>Create project</strong>, and choose the <strong>parent folder</strong> in the native dialog. Cutterhoochee creates <code>&lt;project-name&gt;.cutproj</code> inside that folder.</li>
+</ol>
+<p><strong>Back to format</strong> preserves the selected card and returns to the first step. Cancelling the parent-folder chooser leaves the wizard values in place so you can try again. Choose the format and frame rate before importing; a later source file is normalized into this project profile and does not change it.</p>
 <h2 id="3-workspace-tour">3. Workspace tour</h2>
 <p>When a project is open, the editor has three main regions and a top bar.</p>
 <h3 id="31-top-bar">3.1 Top bar</h3>
 <p>From left to right, the top bar includes:</p>
 <ul>
 <li><strong>Toggle media pane</strong> — collapses or restores the left pane.</li>
-<li>The Cutterhoochee mark and project name button — the project name button opens another project location.</li>
+<li>The project title button — opens a project menu with <strong>Open project…</strong>, <strong>Save project</strong> (<code>Ctrl/Cmd+S</code>), the light/dark theme switch, <strong>Provider settings</strong>, and <strong>Close project</strong>.</li>
 <li><strong>Saved locally</strong> or a current status notice — indicates the latest local save status.</li>
 <li><strong>Undo</strong> and <strong>Redo</strong> — project-history actions.</li>
+<li><strong>Import</strong> — opens the native media chooser (also <code>Ctrl/Cmd+I</code>).</li>
 <li><strong>Export</strong> — opens <strong>Export video</strong> (also <code>Ctrl/Cmd+E</code>).</li>
-<li><strong>Toggle theme</strong> — switches between dark and light UI.</li>
-<li><strong>Provider settings</strong> — opens provider connections and model selection.</li>
-<li><strong>Close project</strong> — closes the open project and returns to the start screen.</li>
+<li>The assistant pane toggle — <strong>Hide assistant</strong> collapses the right pane; <strong>Open assistant</strong> restores it.</li>
 </ul>
-<p>The save indicator is not a substitute for a backup. For important work, use <strong>Save</strong> and copy the project directory only after the save has completed.</p>
+<p>The save indicator is not a substitute for a backup. For important work, use <strong>Save project</strong> and copy the project directory only after the save has completed.</p>
 <h3 id="32-left-pane-project-tools">3.2 Left pane: Project tools</h3>
 <p>The left pane has three tabs:</p>
 <ul>
@@ -131,30 +137,33 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 </ul>
 <p>Below the ruler are track rows. A new project starts with <strong>Main Video</strong>, <strong>Main Audio</strong>, and <strong>Text</strong> tracks. Projects may also contain additional tracks (for example, an <strong>Overlay</strong> video track). Each track has mute and lock controls. The ruler also acts as a range-selection surface: click to put the playhead at a frame, or drag to select a range.</p>
 <h3 id="35-right-pane-assistant-chat">3.5 Right pane: Assistant chat</h3>
-<p>The right pane is <strong>Assistant chat</strong>. It can display assistant messages, tool cards, status, usage information, and <strong>tool updates</strong>. The composer is labeled <strong>Describe an edit…</strong>. <strong>Enter</strong> sends a prompt; <strong>Shift+Enter</strong> inserts a new line. If the assistant is running, <strong>Stop</strong> requests cancellation. <strong>New assistant session</strong> clears the conversation and starts a fresh Pi session.</p>
+<p>The right pane is <strong>Assistant chat</strong>. It can display assistant messages, tool cards, status, usage information, and <strong>tool updates</strong>. The composer is labeled <strong>Describe an edit…</strong>. <strong>Enter</strong> sends a prompt; <strong>Shift+Enter</strong> inserts a new line. If the assistant is running, <strong>Stop</strong> requests cancellation. <strong>New assistant session</strong> clears the conversation and starts a fresh Pi session. Use the top-bar <strong>Hide assistant</strong> control to collapse the pane; <strong>Open assistant</strong> restores it without changing the conversation.</p>
 <details class="animation"><summary>Show GIF demonstration (silent)</summary><img loading="lazy" decoding="async" src="assets/theme-switch.gif" alt="Animated full-workspace theme switch between dark and light."></details>
 <p><em>Figure 7 — <code>theme-switch.gif</code> shows the real full workspace alternating dark and light themes. It does not depict a project edit or provider login.</em></p>
 <h2 id="4-project-lifecycle">4. Project lifecycle</h2>
 <h3 id="41-create-a-project">4.1 Create a project</h3>
 <ol>
-<li>On the start screen, fill in <strong>Project name</strong>.</li>
-<li>Select <strong>Aspect</strong> and <strong>Frame rate</strong>. Use <strong>Advanced format options</strong> if you need 24, 25, or 60 fps.</li>
-<li>Click <strong>Create project</strong>.</li>
-<li>Choose the <strong>parent folder</strong> in the native dialog. Cutterhoochee creates <code>&lt;project-name&gt;.cutproj</code> inside it. Remember this full path for reopening and backup.</li>
+<li>On the start screen, click <strong>Start a new project</strong>.</li>
+<li>Choose <strong>Vertical video</strong> (<strong>9:16</strong>, <strong>1080 × 1920</strong>), <strong>Landscape</strong> (<strong>16:9</strong>, <strong>1920 × 1080</strong>), or <strong>Square</strong> (<strong>1:1</strong>, <strong>1080 × 1080</strong>).</li>
+<li>Click <strong>Continue to details</strong>.</li>
+<li>Enter <strong>Project name</strong> on <strong>Name and review your project</strong>. Open optional <strong>Advanced settings</strong> only if you want to change <strong>Frame rate</strong> from its <strong>30 fps</strong> default to <strong>24 fps</strong>, <strong>25 fps</strong>, or <strong>60 fps</strong>.</li>
+<li>Review the summary, click <strong>Create project</strong>, and choose the <strong>parent folder</strong> in the native dialog. Cutterhoochee creates <code>&lt;project-name&gt;.cutproj</code> inside it. Remember this full path for reopening and backup.</li>
 <li>Wait for the editor to load and confirm the top bar reports local saving.</li>
 </ol>
+<p>Use <strong>Back to format</strong> to revisit the visual card; the card, name, and frame-rate values remain available. If the parent-folder chooser is cancelled, no project is created and the entered values remain in the wizard.</p>
 <p>The initial document has revision <code>0</code>, an empty asset list, and the default video, audio, and text tracks. The project profile is immutable for the operations exposed by the current UI; choose the format carefully before building a timeline.</p>
 <h3 id="42-open-an-existing-project">4.2 Open an existing project</h3>
 <ol>
-<li>From the start screen, click <strong>Open project</strong> (or a name under <strong>Recent projects</strong>).</li>
-<li>Select the saved <code>.cutproj</code> directory, not an arbitrary media file.</li>
+<li>From the start screen, click <strong>Open project</strong>, or open the project-title menu in an existing workspace and choose <strong>Open project…</strong>.</li>
+<li>Select the saved <code>.cutproj</code> directory in the native folder chooser, not an arbitrary media file.</li>
 <li>Wait for <strong>Opening project…</strong> to finish.</li>
 <li>Confirm that the expected project name, assets, and timeline appear.</li>
 </ol>
-<p><strong>Recent projects</strong> retains recent names, not dependable reopen paths. Clicking a recent name still opens the generic folder chooser. The list is updated by create/open/import workflows; it is not a backup or a way to discover a forgotten project path.</p>
+<p>There is no recent-name list to reopen a project. Each <strong>Open project</strong> action uses the saved <code>.cutproj</code> folder chooser, so keep the parent-folder path for future access and backups.</p>
 <p>A project is a directory containing <code>project.json</code> and app-managed media/artifact directories. The native store acquires a project lock; opening the same project concurrently is not a supported collaboration mode. Close the other editor instance before opening the directory again.</p>
 <h3 id="43-import-from-the-start-screen">4.3 Import from the start screen</h3>
-<p><strong>Import media</strong> on the start screen can create a project with the current start-screen format if none is open, then opens a native media chooser. You can also drag files onto <strong>Drop media to import</strong>. After import, the application returns to the project view and displays preparation status.</p>
+<p>On the welcome screen, drop external native video, photo, or audio files anywhere in the desktop window. Cutterhoochee creates a project with the default <strong>Landscape</strong> profile (<strong>16:9</strong>, <strong>30 fps</strong>), opens the native parent-folder chooser, and then imports the dropped files. If you need a different format or frame rate, create the project first through <strong>Start a new project</strong>; the welcome drop path does not choose a custom profile.</p>
+<p>With a project open, external native file drops work anywhere in the desktop window and add the files to that project. The native runtime owns authorization for the exact dropped paths; approve only the files presented by the native operation when a permission request appears. Browser drops and typed paths do not bypass this authorization.</p>
 <h3 id="44-save-and-close">4.4 Save and close</h3>
 <ul>
 <li><strong>Ctrl/Cmd+S</strong> synchronizes the already-open project file and directory at their existing location. It is not a Save As command and does not choose a new destination.</li>
@@ -172,16 +181,16 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <li>Audio families: MP3, WAV, FLAC, AAC, OGG/Opus, and related standalone audio streams.</li>
 <li>Still-image families: PNG, JPEG, and WebP image sequences/files exposed as a still image.</li>
 </ul>
-<p>The visible start-screen drop hint names <strong>Video, audio, PNG, JPEG, or WebP</strong>. The native allowlist is the authority, so a filename extension alone does not guarantee import. Playlists and network media are explicitly rejected: HLS, DASH, concat/segment/playlist inputs, HTTP, RTSP, and similar network sources cannot be imported as a standalone asset.</p>
+<p>The visible import controls accept local files, while the native allowlist remains the authority: a filename extension alone does not guarantee import. Playlists and network media are explicitly rejected: HLS, DASH, concat/segment/playlist inputs, HTTP, RTSP, and similar network sources cannot be imported as a standalone asset.</p>
 <p>Do not import a directory, playlist, URL, or a file whose contents do not match its media metadata. Import is a native, permission-gated operation on an absolute local path.</p>
-<h3 id="52-import-through-media">5.2 Import through <strong>Media</strong></h3>
+<h3 id="52-import-through-media-or-native-file-drops">5.2 Import through <strong>Media</strong> or native file drops</h3>
 <ol>
-<li>Open the <strong>Media</strong> tab.</li>
-<li>Click the folder button labeled <strong>Import media</strong>.</li>
+<li>With a project open, click the top-bar <strong>Import</strong> button or open the <strong>Media</strong> tab and click <strong>Import media</strong>.</li>
 <li>In the native chooser, select one or more local files.</li>
 <li>Confirm the file permission request if shown.</li>
 <li>Wait while each item changes from <strong>Preparing normalized media…</strong> to a ready asset.</li>
 </ol>
+<p>You can also release external native files anywhere in the desktop window. The native runtime authorizes the exact dropped paths; accept only the presented file grant if one appears. A browser file drop or a manually typed path is not an alternate import route.</p>
 <p>You can also drag an asset card from the library onto a timeline track. Dragging creates a copy/reference clip in the timeline; it does not move or delete the managed asset.</p>
 <h3 id="53-understand-asset-cards">5.3 Understand asset cards</h3>
 <p>A ready asset card can show:</p>
@@ -254,7 +263,7 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <h3 id="66-mute-and-lock-tracks">6.6 Mute and lock tracks</h3>
 <p>Each track row has two icon buttons:</p>
 <ul>
-<li><strong>Mute</strong>/<strong>Unmute</strong> changes the stored track status. <strong>Current limitation: the render plan does not use this status, so it must not be relied on to silence preview or exported audio.</strong></li>
+<li><strong>Mute</strong>/<strong>Unmute</strong> toggles whether that track contributes audio in preview and export. On a video track, muting silences the track's audio while its video remains visible.</li>
 <li><strong>Lock</strong>/<strong>Unlock</strong> prevents timing/content edits that would touch the track.</li>
 </ul>
 <p>Use <strong>Lock</strong> before inspecting a multi-track section to avoid moving it accidentally. A locked track is an editing constraint, not a permanent protection boundary: unlock it only when you intentionally need to edit it.</p>
@@ -277,19 +286,20 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <p>The corner label reports the project dimensions and either <strong>Auto</strong> or <strong>Software</strong>. A <code>buffering</code> overlay means the engine is obtaining the required frame/audio window. An error overlay offers <strong>Retry preview</strong>. If video decoding remains unavailable, use <strong>Software</strong>, retry after normalization, and inspect the notice for a source-specific error. Do not infer that a successful software preview means the source is accepted by every external player.</p>
 <h3 id="73-audio-clock-and-waveform">7.3 Audio clock and waveform</h3>
 <p>Application audio is normalized to 48 kHz, stereo PCM and scheduled on the native project sample grid. Browser/device output may use a different hardware rate, but project sample coordinates remain 48 kHz. The timeline waveform is a bounded peak summary of normalized PCM; it is a visual aid, not an audio export substitute.</p>
-<p>The preview’s volume icon is an indicator, not a user volume slider. Change clip level using <strong>Gain · dB</strong> in <strong>Inspector</strong>. Clearing <strong>Clip audio</strong> excludes audio from a <strong>video-track clip</strong>. The current render plan ignores track <strong>Mute</strong> and does not exclude audio-track clips when their <strong>Clip audio</strong> checkbox is cleared. Do not use those ineffective states as a guarantee of silence. If unwanted audio must be excluded, remove its audio-track clip from a deliberately backed-up working copy and inspect the final export.</p>
+<p>The preview’s volume icon is an indicator, not a user volume slider. Change clip level using <strong>Gain · dB</strong> in <strong>Inspector</strong>. Clearing <strong>Clip audio</strong> excludes audio from the selected video- or audio-track clip. <strong>Mute</strong> excludes audio from the muted track in preview and export; muting a video track leaves its video visible. Use these controls to shape the mix, then inspect the final export.</p>
 <h3 id="74-audio-gaps-and-mixed-tracks">7.4 Audio gaps and mixed tracks</h3>
 <p>The render plan includes audio segments and intentional silence where no enabled clip contributes. Video-only assets can therefore play without an audio stream, while export still produces an audio stream for the final MP4. If audio is missing, check:</p>
 <ol>
 <li>The clip has normalized audio (an audio waveform can be generated).</li>
-<li>For a video-track clip, <strong>Clip audio</strong> is enabled if its sound is wanted.</li>
-<li>Do not use track <strong>Mute</strong> or an audio-track clip’s <strong>Clip audio</strong> checkbox to infer what the current renderer will play.</li>
+<li>For the video- or audio-track clip, <strong>Clip audio</strong> is enabled when its sound is wanted.</li>
+<li>The containing track is not muted. Muting a video track removes only its audio; its video remains visible.</li>
 <li><strong>Gain · dB</strong> is not set below the audible range.</li>
 <li>The playhead is inside the clip’s timeline interval.</li>
 </ol>
 <h2 id="8-inspector-text-and-transitions">8. Inspector, text, and transitions</h2>
 <h3 id="81-open-the-inspector">8.1 Open the Inspector</h3>
 <p>Select a media clip or text item, then choose the <strong>Inspector</strong> tab. With nothing selected, the panel says <strong>Nothing selected</strong> and instructs you to select a clip, title, or caption.</p>
+<p>Inspector groups follow the selected track type: <strong>Canvas</strong> and <strong>Transitions</strong> apply to video-track clips, while <strong>Audio</strong> applies to both video-track and audio-track clips.</p>
 <p><img loading="lazy" decoding="async" src="assets/clip-inspector.png" alt="Inspector tab with a selected video clip and timing, canvas, audio, and transition fields."></p>
 <p><em>Figure 9 — <strong>Inspector</strong> capture for the selected generated <code>long-numbered.mp4</code> clip. Only the fields visible in the capture are described here; the test-pattern media is not user footage.</em></p>
 <h3 id="82-clip-timing">8.2 Clip timing</h3>
@@ -303,7 +313,7 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <p>Values must be non-negative whole frames, and <strong>Duration</strong> must be positive. The native operation validates the source range, project range, track, and any transition relationship. If a timing change would invalidate an explicit dissolve, the UI removes the existing dissolve in the same edit before applying the trim; review the result rather than assuming the dissolve remains.</p>
 <p><strong>Destructive-edit caution:</strong> Applying timing can remove source content or change which source frames captions refer to. Use <strong>Undo</strong> immediately if the resulting preview is not what you intended.</p>
 <h3 id="83-canvas-and-visual-properties">8.3 Canvas and visual properties</h3>
-<p>The <strong>Canvas</strong> section provides:</p>
+<p>For a selected video-track clip, the <strong>Canvas</strong> section provides:</p>
 <ul>
 <li><strong>Fit</strong> — <strong>Contain</strong> or <strong>Cover</strong>.</li>
 <li><strong>X · bp</strong> and <strong>Y · bp</strong> — base-point positions from <code>0</code> to <code>10000</code>; <code>5000</code> is the centered coordinate.</li>
@@ -312,9 +322,9 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 </ul>
 <p>The values are normalized project coordinates rather than CSS pixels. Use small deliberate changes and confirm the canvas after each blur/commit. A field can commit on blur, while <strong>Apply timing</strong> commits the timing group explicitly.</p>
 <h3 id="84-clip-audio-properties">8.4 Clip audio properties</h3>
-<p>The <strong>Audio</strong> section provides:</p>
+<p>For a selected video-track or audio-track clip, the <strong>Audio</strong> section provides:</p>
 <ul>
-<li><strong>Clip audio</strong> checkbox. It excludes audio from video-track clips; it currently does not exclude audio-track clips from the render plan.</li>
+<li><strong>Clip audio</strong> checkbox. It excludes audio from both video-track and audio-track clips.</li>
 <li><strong>Gain · dB</strong>, bounded by the current native validation range (the control exposes a practical range of <code>-60</code> to <code>12</code> dB and accepts decimal steps).</li>
 <li><strong>Fade in</strong> and <strong>Fade out</strong> in whole frames.</li>
 </ul>
@@ -332,7 +342,7 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <h3 id="86-captions-and-text-items">8.6 Captions and text items</h3>
 <p>Caption items are also editable text items, shown on the text track with a <code>CC</code> marker. Select a caption to edit its text/style and placement in <strong>Inspector</strong>. Caption timing may be owned by a source clip; moving, splitting, trimming, or removing that clip projects the owned caption range with the retained source interval. Keep the text track unlocked for operations that need to move or split those captions. Editing a caption changes the editable project item, not the transcript evidence; it does not rewrite the stored transcript. The current UI has no direct drag/timing control for text or captions.</p>
 <h3 id="87-dissolves">8.7 Dissolves</h3>
-<p>A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:</p>
+<p>The <strong>Transitions</strong> section is available for video-track clips. A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:</p>
 <ol>
 <li>Select the left clip.</li>
 <li>Confirm that a next clip exists on the same video track and will follow it.</li>
@@ -423,7 +433,9 @@ Let us begin.
 <li>If the run is unsafe, too broad, or simply no longer wanted, click <strong>Stop</strong>.</li>
 <li>If the conversation has become confusing, click <strong>New assistant session</strong>. This clears the assistant history for the current project scope; it does not undo committed editor changes.</li>
 </ol>
-<p>The chat shows <strong>tool updates</strong>, tool status, and failures. A failed tool is not evidence that a partial edit did or did not occur; refresh the project and inspect the actual revision before retrying.</p>
+<p>The chat shows assistant text and tool updates. <strong>Activity → Native work</strong> shows native operations, affected targets, confirmed project changes, approval waits, and background jobs. Nonterminal work and failed receipts stay visible by default; completed and cancelled entries are behind <strong>Show history (N)</strong>, which expands the activity history. A returned job ID means work started, not that it completed. <strong>Cancel</strong> requests cancellation; the final state and any error come from the native job. <strong>Stop</strong> does not undo edits already committed.</p>
+<p>Activity highlights are separate from your selection. Reads briefly identify inspected targets; confirmed edits can show the affected range, an old clip position, or Inspector before/after values. Dry runs do not animate committed changes. Large changes use bounded highlights rather than animating every item. <strong>Show</strong> explicitly reveals a target outside the current view without selecting it or starting playback. Activity alone does not take your focus, scroll position, or playhead; reduced-motion preferences are respected.</p>
+<p>Explicit assistant play, pause, and seek requests use the visible player and wait for its acknowledgement. Inspection and other read-only tools do not restart playback. A confirmed time-range selection stays visible until another selection replaces it. Review the actual revision and native activity result before retrying a failed operation; a later cancellation does not mean an earlier commit was rolled back.</p>
 <h3 id="103-provider-settings">10.3 Provider settings</h3>
 <p>Click the key icon in the chat intent or <strong>Provider settings</strong> in the top bar. The dialog contains:</p>
 <ul>
@@ -500,7 +512,7 @@ Let us begin.
 <li>Save the project with <strong>Ctrl/Cmd+S</strong>.</li>
 <li>Review the current revision number in the top bar/status and inspect the complete timeline and preview.</li>
 <li>Confirm that all assets are normalized and no card says <strong>Media preparation is incomplete.</strong></li>
-<li>Check captions, actual audio output, clip gain/fades, and transition overlaps. Do not rely on track <strong>Mute</strong> or an audio-track clip’s <strong>Clip audio</strong> state to silence output in the current build.</li>
+<li>Check captions, actual audio output, clip gain/fades, track mute state, and transition overlaps. <strong>Mute</strong> silences that track's audio in preview and export (video remains visible when its track is muted), and <strong>Clip audio</strong> controls audio on both video-track and audio-track clips.</li>
 <li>Click <strong>Export</strong> or press <code>Ctrl/Cmd+E</code>.</li>
 </ol>
 <p>The <strong>Export video</strong> dialog captures the selected current revision. Its message explicitly says the export will not change if you continue editing. Edits made after export starts do not mutate the captured render plan; they become a later project revision.</p>
@@ -585,7 +597,7 @@ Let us begin.
 </tr>
 <tr>
 <td><code>Ctrl/Cmd+I</code></td>
-<td>Import media</td>
+<td>Import</td>
 <td>Opens the native media chooser.</td>
 </tr>
 <tr>
@@ -629,17 +641,20 @@ Let us begin.
 <td>When the focus is on the <strong>Resize assistant</strong> separator.</td>
 </tr>
 </tbody></table></div>
-<p><code>Ctrl</code> is used on Linux/Windows-style keyboards and <code>Cmd</code> on macOS. The app’s save-screen footer displays the platform-neutral <code>Ctrl/Cmd+I Import</code>, <code>Ctrl/Cmd+S Save</code>, and <code>Ctrl/Cmd+E Export</code> hints.</p>
+<p><code>Ctrl</code> is used on Linux/Windows-style keyboards and <code>Cmd</code> on macOS. In the workspace, the top bar exposes <strong>Import</strong>, <strong>Save project</strong> in the project-title menu, and <strong>Export</strong> as explicit actions alongside these shortcuts.</p>
 <p><code>Backspace</code> is not a timeline-delete shortcut, and <code>Ctrl/Cmd+Y</code> is not the implemented redo shortcut.</p>
 <h2 id="13-practical-end-to-end-tutorial">13. Practical end-to-end tutorial</h2>
 <p>This workflow intentionally uses only controls that are visible and implemented. It works with generated test media or your own local files.</p>
 <h3 id="131-create-a-portrait-captioned-cut">13.1 Create a portrait captioned cut</h3>
 <ol>
 <li>Launch the Linux x64 AppImage and confirm <strong>Desktop ready</strong>.</li>
-<li>Under <strong>New project</strong>, enter <code>Portrait demo</code> as <strong>Project name</strong>.</li>
-<li>Set <strong>Aspect</strong> to <strong>Portrait · 9:16</strong>.</li>
-<li>Leave <strong>Frame rate</strong> at <strong>30 fps</strong>, click <strong>Create project</strong>, and select the parent folder. Note the resulting <code>Portrait demo.cutproj</code> path.</li>
-<li>Open <strong>Media</strong> and click <strong>Import media</strong>.</li>
+<li>On the start screen, click <strong>Start a new project</strong>.</li>
+<li>On <strong>Choose a visual format</strong>, select <strong>Vertical video</strong> — <strong>9:16</strong>, <strong>1080 × 1920</strong> — for <strong>Shorts · Reels · TikTok</strong>.</li>
+<li>Click <strong>Continue to details</strong>.</li>
+<li>On <strong>Name and review your project</strong>, enter <code>Portrait demo</code> as <strong>Project name</strong>.</li>
+<li>Leave <strong>Advanced settings</strong> closed and confirm the <strong>Frame rate</strong> summary is <strong>30 fps</strong>.</li>
+<li>Click <strong>Create project</strong>, choose the parent folder in the native dialog, and note the resulting <code>Portrait demo.cutproj</code> path.</li>
+<li>Open <strong>Media</strong> and click <strong>Import media</strong> (or use the top-bar <strong>Import</strong> button).</li>
 <li>Select one video with an audio stream and, optionally, a separate WAV file or still PNG/JPEG/WebP.</li>
 <li>Wait until the imported card has a thumbnail/duration and no <strong>Preparing normalized media…</strong> warning.</li>
 <li>Select the video card and click <strong>Add to timeline</strong>; this appends it to the end of the first video track, not at the playhead. Select an audio card and add it to <strong>Main Audio</strong> if you need a separate music/voice layer; the default audio insertion starts at frame 0 and is capped to the existing timeline duration.</li>
@@ -653,8 +668,8 @@ Let us begin.
 <li>Select the matching video clip in the timeline and click <strong>Apply captions</strong>. Review each <code>CC</code> block in <strong>Timeline</strong>. Reapplying later will replace all captions owned by this clip, so finish any transcript-derived caption edits after the last application.</li>
 <li>Return to <strong>Media</strong> or use <strong>Add title</strong> at the current playhead. Select the title block, edit <strong>Text</strong>, and adjust <strong>Style</strong>, size, and positions in <strong>Inspector</strong>.</li>
 <li>Select the first clip, identify the next clip, and use <strong>Transitions</strong> → <strong>Frames</strong> → <strong>Dissolve next</strong> to add a short dissolve only if both clips are long enough. Preview the overlap.</li>
-<li>Use <strong>Gain · dB</strong>, <strong>Fade in</strong>, and <strong>Fade out</strong> to balance audio. <strong>Clip audio</strong> can exclude the video clip’s own sound. Do not rely on track <strong>Mute</strong> or an audio-track clip’s checkbox for silence; check audible output.</li>
-<li>Save with <code>Ctrl/Cmd+S</code>. Wait for <strong>Saved locally</strong>.</li>
+<li>Use <strong>Gain · dB</strong>, <strong>Fade in</strong>, and <strong>Fade out</strong> to balance audio. <strong>Clip audio</strong> can exclude audio from the selected video- or audio-track clip. <strong>Mute</strong> silences a track's audio in preview/export; muting a video track leaves its video visible.</li>
+<li>Save with <code>Ctrl/Cmd+S</code> or <strong>Save project</strong>. Wait for <strong>Saved locally</strong>.</li>
 <li>Click <strong>Export</strong>. Choose <code>1080p</code> for a full-size portrait deliverable, check <strong>SRT caption sidecar</strong> if a separate subtitle file is wanted, and start the export.</li>
 <li>Choose the MP4 destination. Review and answer its mandatory <strong>Allow once</strong> request and the separate SRT request if enabled; inspect existing-file overwrite details for each.</li>
 <li>Wait for <strong>Export complete</strong> and 100% progress. Use <strong>Play</strong> to watch the finalized MP4, and <strong>Show file</strong> to reveal it. Keep the MP4 and <code>.srt</code> together if you selected the sidecar.</li>
@@ -670,15 +685,15 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 </code></pre>
 <p>Before the first prompt in an unapproved context—including either example above—inspect <strong>Share project evidence?</strong> and deliberately choose <strong>Deny</strong> or <strong>Allow evidence</strong>. This is broader project-context consent, not permission for only the phrase or clip named in the prompt. For a native command, inspect <strong>Permission required</strong> separately. A prompt that says “make this vertical” cannot change the project profile through an unsupported hidden control; create a new portrait project and re-import/assemble there if you need a different aspect.</p>
 <h2 id="14-troubleshooting">14. Troubleshooting</h2>
-<h3 id="browser-preview--native-required">“Browser preview · native required”</h3>
+<h3 id="browser-preview--desktop-required">“Browser preview · desktop required”</h3>
 <p>You are not connected to the native desktop bridge. Launch the Linux x64 AppImage itself. Browser mode is not sufficient for native project dialogs, media imports, normalization, transcript model download, export, or permission prompts.</p>
 <h3 id="the-start-screen-does-not-create-a-project">The start screen does not create a project</h3>
 <ul>
-<li>Confirm the native save/location dialog was not cancelled.</li>
+<li>If you cancelled the parent-folder chooser, return to the details step and try again; the selected format, name, and frame rate remain in the wizard.</li>
 <li>Use a writable, real local directory.</li>
-<li>Do not choose a directory that already contains a project if you intended <strong>New project</strong>; the store refuses to overwrite an existing project at that location.</li>
+<li>Do not choose a directory that already contains a project if you intended <strong>Start a new project</strong>; the store refuses to overwrite an existing project at that location.</li>
 <li>Check that the name is not only whitespace.</li>
-<li>Choose one of the supported aspect/frame-rate combinations.</li>
+<li>Choose one of the three format cards and one of the supported frame rates.</li>
 </ul>
 <h3 id="the-project-is-busy-or-another-instance-is-open">“The project is busy” or another instance is open</h3>
 <p>A project directory is locked by its active writer. Close the other Cutterhoochee window/process and retry <strong>Open project</strong>. Do not delete <code>.project.lock</code> while another process may still be writing.</p>
@@ -707,7 +722,7 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 </ol>
 <p>Software preview is a diagnostic/preview fallback, not a promise of hardware acceleration or full-resolution playback.</p>
 <h3 id="preview-plays-video-but-no-sound-is-audible">Preview plays video but no sound is audible</h3>
-<p>Check video-clip <strong>Clip audio</strong>, <strong>Gain · dB</strong>, fades, and the playhead interval. Track <strong>Mute/Unmute</strong> is currently stored state only; an audio-track clip’s <strong>Clip audio</strong> checkbox also does not exclude its sound from the render plan. Neither is a reliable playback/export mute. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.</p>
+<p>Check the selected clip’s <strong>Clip audio</strong>, <strong>Gain · dB</strong>, fades, the containing track’s <strong>Mute</strong> state, and the playhead interval. <strong>Clip audio</strong> applies to both video-track and audio-track clips. <strong>Mute/Unmute</strong> silences or restores a track’s audio in preview and export; muting a video track leaves its video visible. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.</p>
 <h3 id="split-says-the-playhead-is-outside-the-clip">Split says the playhead is outside the clip</h3>
 <p>Move the playhead strictly between the clip’s first and last frame. The first and last boundaries are not valid split positions. If an explicit dissolve touches the clip, use <strong>Remove dissolve</strong>, split, and add a new valid transition afterward.</p>
 <h3 id="range-removal-changed-more-tracks-than-intended">Range removal changed more tracks than intended</h3>
@@ -785,8 +800,8 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 <ul>
 <li>This guide verifies the Linux x64 AppImage workflow. Windows and macOS are unverified.</li>
 <li>Browser preview is not a native desktop runtime; native file access, normalization, provider auth, permissions, and export require the desktop bridge.</li>
-<li>Project aspects are limited to 16:9, 9:16, and 1:1.</li>
-<li>Project frame rates are limited to 24, 25, 30, and 60 fps. Timeline timing is integer frame-based.</li>
+<li>Project aspects are limited to the <strong>Vertical video</strong> 9:16 (1080 × 1920), <strong>Landscape</strong> 16:9 (1920 × 1080), and <strong>Square</strong> 1:1 (1080 × 1080) cards.</li>
+<li>Project frame rates are limited to 24, 25, 30, and 60 fps; <strong>30 fps</strong> is the default and the other choices are under <strong>Advanced settings</strong>. Timeline timing is integer frame-based.</li>
 <li>Native export offers 720p and 1080p choices and produces H.264 video with AAC, 48 kHz stereo audio after validation. Arbitrary dimensions/codecs are not exposed by the current export surface.</li>
 <li>Import rejects playlists and network media (including HLS/DASH/concat/segment/HTTP/RTSP paths) and requires an allowed standalone demuxer/decodable stream.</li>
 <li>Transcription requires normalized 48 kHz stereo audio and the native-pinned multilingual model, or an imported SRT for the manual-caption route. Generated wording/timing requires review.</li>
@@ -795,7 +810,7 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 <li>Pi can request editor and external operations, but AI output is not a substitute for revision review. External effects approved through permissions are not reversed by timeline Undo.</li>
 <li>Preview <strong>Software</strong> mode is a bounded fallback for display; it is not an export-quality guarantee.</li>
 <li>The current UI exposes same-track clip movement and insertion; do not assume arbitrary cross-track drag-and-drop, arbitrary track creation, or hidden project-profile conversion controls.</li>
-<li>Track <strong>Mute</strong> is not consumed by the current render plan. <strong>Clip audio</strong> excludes video-track clip audio but does not exclude audio-track clips. These limitations can affect exported audio; do not mistake a stored muted/disabled state for guaranteed silence.</li>
+<li>Track <strong>Mute</strong> silences that track’s audio in preview and export; muting a video track leaves its video visible. <strong>Clip audio</strong> disables audio on both video-track and audio-track clips.</li>
 </ul>
 <h3 id="162-glossary">16.2 Glossary</h3>
 <p><strong>AppImage</strong> — A self-contained Linux application package used by the exercised Cutterhoochee build.</p>
@@ -818,6 +833,6 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 <p><strong>Ripple range removal</strong> — <code>Shift+Delete</code> on a selected ruler range. It removes the range and shifts later timeline content while projecting affected clips/text/captions.</p>
 <p><strong>SRT</strong> — SubRip Subtitle text format. Cutterhoochee can import SRT cues as editable captions and can optionally export a sidecar beside the MP4.</p>
 <p><strong>Source in</strong> — The first source frame used by a clip. Changing it changes which normalized source frames appear without necessarily changing the clip’s timeline start.</p>
-<p><strong>Track</strong> — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; the current mute-state rendering limitation is described above.</p>
+<p><strong>Track</strong> — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; <strong>Mute</strong> controls whether that track contributes audio to preview/export, while video remains visible when a video track is muted.</p>
 <p><strong>Workspace</strong> — The app-owned authority scope that binds a project, managed artifacts, credentials/permissions, and native runtime state. Workspace authority is not copied into the portable project JSON.</p>
 </main><footer>Readable offline. Markdown is the editable source. GIFs are silent workflow examples, not performance measurements.</footer></body></html>

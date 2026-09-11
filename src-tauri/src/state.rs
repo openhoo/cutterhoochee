@@ -1,3 +1,4 @@
+use crate::activity::ActivityRegistry;
 use crate::agent_bridge::{
     AgentBridge, AgentPaths, BridgeLifecycle, PrivateRequestContext, PrivateRequestHandler,
 };
@@ -48,7 +49,9 @@ struct AppStateInner {
     evidence: EvidenceRuntime,
     permissions: PermissionsRuntime,
     credentials: CredentialsRuntime,
+    permission_events: Mutex<tokio::sync::broadcast::Receiver<crate::permissions::PermissionEvent>>,
     assistant: AssistantRuntime,
+    activity: ActivityRegistry,
 }
 
 /// Process-wide state shared by the Tauri command handler and the supervised
@@ -73,6 +76,8 @@ impl AppState {
         let media = MediaRuntime::new();
         let registry = media.jobs();
         let jobs = JobsRuntime::from_registry(registry.clone());
+        let permissions = PermissionsRuntime::new(permission_data_dir.clone())?;
+        let permission_events = Mutex::new(permissions.subscribe());
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 paths,
@@ -88,9 +93,11 @@ impl AppState {
                 render: RenderRuntime::new(),
                 export: ExportRuntime::from_registry(registry),
                 evidence: EvidenceRuntime::new(),
-                permissions: PermissionsRuntime::new(permission_data_dir.clone())?,
+                permissions,
+                permission_events,
                 credentials: CredentialsRuntime::new(permission_data_dir)?,
                 assistant: AssistantRuntime::new(),
+                activity: ActivityRegistry::new(),
             }),
         })
     }
@@ -219,6 +226,120 @@ impl AppState {
 
     pub fn assistant(&self) -> &AssistantRuntime {
         &self.inner.assistant
+    }
+
+    pub fn activity(&self) -> &ActivityRegistry {
+        &self.inner.activity
+    }
+
+    pub fn activity_snapshot_at(
+        &self,
+        generation: u64,
+        project_id: Option<&str>,
+    ) -> Result<Vec<crate::activity::AgentActivity>, AppError> {
+        self.validate_generation(generation)?;
+        let current_project = self.current_project_id();
+        if current_project.as_deref() != project_id {
+            return Err(AppError::stale_session(
+                "The activity snapshot belongs to a different project",
+            ));
+        }
+        let mut permission_events = Vec::new();
+        {
+            let mut receiver = self
+                .inner
+                .permission_events
+                .lock()
+                .map_err(|_| AppError::io("The permission activity listener is unavailable"))?;
+            loop {
+                match receiver.try_recv() {
+                    Ok(event) => permission_events.push(event),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        for event in permission_events {
+            use crate::permissions::PermissionEvent;
+            let updates = match event {
+                PermissionEvent::Requested(request) => self.inner.activity.approval_requested(
+                    request.scope.generation,
+                    request.scope.project_id.as_deref(),
+                    request.run_id.as_deref(),
+                    request.tool_call_id.as_deref(),
+                    &request.operation_id,
+                )?,
+                PermissionEvent::Decided(decision) => self
+                    .inner
+                    .activity
+                    .approval_decided(&decision.operation_id, decision.allow)?,
+                PermissionEvent::Revoked { operation_id } => {
+                    self.inner.activity.approval_revoked(&operation_id)?
+                }
+                PermissionEvent::EvidenceChanged(_) => Vec::new(),
+            };
+            for activity in updates {
+                self.emit_activity_update(&activity)?;
+            }
+        }
+        let activities = self.inner.activity.snapshot(generation, project_id)?;
+        if !activities.is_empty() {
+            let jobs = self
+                .jobs()
+                .registry()
+                .activity_snapshot(generation, project_id)?;
+            for activity in self
+                .inner
+                .activity
+                .reconcile_jobs(generation, project_id, &jobs)?
+            {
+                self.emit_activity_update(&activity)?;
+            }
+        }
+        self.validate_generation(generation)?;
+        self.inner.activity.snapshot(generation, project_id)
+    }
+
+    pub fn activity_start(
+        &self,
+        start: crate::activity::ActivityStart,
+    ) -> Result<
+        (
+            crate::activity::ActivityHandle,
+            crate::activity::AgentActivity,
+        ),
+        AppError,
+    > {
+        let (handle, activity) = self.inner.activity.start(start)?;
+        self.emit_activity_update(&activity)?;
+        Ok((handle, activity))
+    }
+
+    pub fn activity_patch(
+        &self,
+        handle: &crate::activity::ActivityHandle,
+        patch: crate::activity::ActivityPatch,
+    ) -> Result<Option<crate::activity::AgentActivity>, AppError> {
+        let activity = self.inner.activity.patch(handle, patch)?;
+        if let Some(activity) = &activity {
+            self.emit_activity_update(activity)?;
+        }
+        Ok(activity)
+    }
+
+    pub fn emit_activity_update(
+        &self,
+        activity: &crate::activity::AgentActivity,
+    ) -> Result<(), AppError> {
+        self.emit_sanitized_event(
+            "agent_activity",
+            activity.run_id.clone(),
+            Some(
+                serde_json::to_value(activity).map_err(|_| {
+                    AppError::schema("The native activity event could not be encoded")
+                })?,
+            ),
+        )
     }
 
     pub fn generation(&self) -> u64 {
@@ -466,16 +587,46 @@ impl AppState {
             Ok((current_generation, project_id, false))
         }
     }
-    fn stop_bridge_before_lifecycle(&self) {
-        let bridge = self
+
+    fn validate_lifecycle_entry(&self, expected_generation: u64) -> Result<(), AppError> {
+        let _lifecycle = self
             .inner
-            .bridge
+            .lifecycle
             .lock()
-            .ok()
-            .and_then(|mut current| current.take());
+            .map_err(|_| AppError::io("The application lifecycle lock is unavailable"))?;
+        self.validate_generation(expected_generation)
+    }
+
+    /// Detach the bridge for a human lifecycle request only while its
+    /// generation is still current.  The bridge is stopped after every state
+    /// lock has been released because bridge cleanup emits events and invokes
+    /// callbacks that re-enter AppState.
+    fn stop_bridge_before_lifecycle(&self, expected_generation: u64) -> Result<(), AppError> {
+        let bridge = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .lock()
+                .map_err(|_| AppError::io("The application lifecycle lock is unavailable"))?;
+            self.validate_generation(expected_generation)?;
+
+            // AgentBridge::stop() synchronously re-enters AppState.  It is
+            // therefore detached here and stopped only after lifecycle and
+            // bridge state locks have both been released.  Cleanup callbacks
+            // cannot run while ownership is being detached, so they cannot
+            // re-enter a partially transitioned AppState.
+            let mut current = self
+                .inner
+                .bridge
+                .lock()
+                .map_err(|_| AppError::io("The agent bridge state lock is unavailable"))?;
+            current.take()
+        };
+
         if let Some(bridge) = bridge {
             bridge.stop();
         }
+        Ok(())
     }
 
     fn schedule_bridge_restart(&self) {
@@ -595,6 +746,9 @@ impl AppState {
             run_id,
             data: sanitize_event_data(data),
         };
+        if event.kind.contains("_job_") {
+            let _ = self.activity_snapshot_at(event.generation, event.project_id.as_deref())?;
+        }
         let handle = self
             .inner
             .app_handle
@@ -620,6 +774,12 @@ impl AppState {
             return Err(AppError::stale_session(
                 "The bridge event belongs to a different project",
             ));
+        }
+        if event.event == "agent_activity"
+            || event.event.starts_with("preview_transport")
+            || event.event.ends_with("_cancel")
+        {
+            return Ok(());
         }
         self.emit_sanitized_event(
             event.event.clone(),
@@ -698,13 +858,13 @@ impl AppState {
         let Some(open) = project.as_ref() else {
             return Ok(ProjectStatus::closed(generation));
         };
-        let snapshot = open.store.snapshot()?;
+        let (project_id, workspace_id, name, revision) = open.store.metadata()?;
         Ok(ProjectStatus::open(
             generation,
-            snapshot.project_id,
-            snapshot.workspace_id,
-            snapshot.document.name,
-            snapshot.document.revision,
+            project_id,
+            workspace_id,
+            name,
+            revision,
         ))
     }
 
@@ -1074,12 +1234,13 @@ impl AppState {
         run_id: Option<&str>,
         connection_id: Option<&str>,
     ) -> Result<ProjectStatus, AppError> {
+        self.validate_lifecycle_entry(expected_generation)?;
         if let Some(run_id) = run_id {
             self.require_active_run_at(expected_generation, run_id)?;
         }
         let store = ProjectStore::open(root, &self.paths().app_data_dir)?;
         if connection_id.is_none() {
-            self.stop_bridge_before_lifecycle();
+            self.stop_bridge_before_lifecycle(expected_generation)?;
         }
         let _lifecycle = self
             .inner
@@ -1138,6 +1299,7 @@ impl AppState {
         run_id: Option<&str>,
         connection_id: Option<&str>,
     ) -> Result<ProjectStatus, AppError> {
+        self.validate_lifecycle_entry(expected_generation)?;
         if let Some(run_id) = run_id {
             self.require_active_run_at(expected_generation, run_id)?;
         }
@@ -1151,7 +1313,7 @@ impl AppState {
             fps_den,
         )?;
         if connection_id.is_none() {
-            self.stop_bridge_before_lifecycle();
+            self.stop_bridge_before_lifecycle(expected_generation)?;
         }
         let _lifecycle = self
             .inner
@@ -1219,11 +1381,12 @@ impl AppState {
         run_id: Option<&str>,
         connection_id: Option<&str>,
     ) -> Result<ProjectStatus, AppError> {
+        self.validate_lifecycle_entry(expected_generation)?;
         if let Some(run_id) = run_id {
             self.require_active_run_at(expected_generation, run_id)?;
         }
         if connection_id.is_none() {
-            self.stop_bridge_before_lifecycle();
+            self.stop_bridge_before_lifecycle(expected_generation)?;
         }
         let _lifecycle = self
             .inner
@@ -1724,6 +1887,9 @@ mod tests {
         AssetKind, FitMode, MediaClip, NormalizedAsset, NormalizedVideo, OriginalMediaMetadata,
         OriginalStreamKind, OriginalStreamMetadata, TrackKind,
     };
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
@@ -1753,6 +1919,34 @@ mod tests {
             temp_dir: root.join("app-cache/tmp"),
             artifact_dir: root.join("app-cache/artifacts"),
         }
+    }
+
+    #[cfg(unix)]
+    fn install_fixture_bridge(
+        state: &AppState,
+        root: &Path,
+    ) -> (AgentBridge, tokio::runtime::Runtime) {
+        let mut paths = fixture_paths(root);
+        fs::create_dir_all(paths.resource_dir.join("binaries")).expect("resource binaries");
+        fs::write(
+            &paths.agent_entrypoint,
+            b"#!/bin/sh\nwhile IFS= read -r line; do\n  :\ndone\n",
+        )
+        .expect("fixture agent");
+        fs::set_permissions(&paths.agent_entrypoint, fs::Permissions::from_mode(0o700))
+            .expect("fixture agent permissions");
+        paths.node_path = PathBuf::from("/bin/sh");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("bridge runtime");
+        let bridge = {
+            let _entered = runtime.enter();
+            AgentBridge::spawn(state.clone(), paths).expect("fixture bridge")
+        };
+        *state.inner.bridge.lock().expect("bridge state") = Some(bridge.clone());
+        (bridge, runtime)
     }
 
     fn ready_video_asset(id: &str) -> AssetManifest {
@@ -1904,7 +2098,7 @@ mod tests {
                 assert!(result.changed);
                 assert_eq!(result.revision, 2);
             }
-            other => panic!("unexpected edit reply: {other:?}"),
+            _ => panic!("unexpected edit reply variant"),
         }
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1923,7 +2117,7 @@ mod tests {
                 assert!(status.open);
                 assert_eq!(status.revision, Some(2));
             }
-            other => panic!("unexpected status reply: {other:?}"),
+            _ => panic!("unexpected status reply variant"),
         }
         let snapshot = runtime
             .block_on(dispatch(EditorRequest::ProjectSnapshot {}, caller, &state))
@@ -1933,7 +2127,106 @@ mod tests {
                 assert_eq!(snapshot.document.revision, 2);
                 assert_eq!(snapshot.document.clips.len(), 1);
             }
-            other => panic!("unexpected snapshot reply: {other:?}"),
+            _ => panic!("unexpected snapshot reply variant"),
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn stale_lifecycle_requests_leave_project_generation_and_bridge_unchanged() {
+        let (state, root, project_id, _) = dispatch_fixture();
+        let generation = state.generation();
+        let before = state.status().expect("status before stale requests");
+        let target_root = root.join("Other.cutproj");
+        let target = ProjectStore::create(
+            &target_root,
+            &state.paths().app_data_dir,
+            "Other",
+            Some("16:9"),
+            30,
+            1,
+        )
+        .expect("target project");
+        drop(target);
+        let create_root = root.join("Should Not Exist.cutproj");
+        let (bridge, runtime) = install_fixture_bridge(&state, &root);
+        let bridge_id = bridge.connection_id().to_owned();
+
+        let stale_open = state.open_project_at(&target_root, generation - 1, None, None);
+        let stale_create = state.create_project_at(
+            &create_root,
+            "Should Not Exist".to_owned(),
+            Some("16:9".to_owned()),
+            Some(30),
+            Some(1),
+            generation - 1,
+            None,
+            None,
+        );
+        let stale_close = state.close_project_at(generation - 1, None, None);
+        let after = state.status().expect("status after stale requests");
+        let bridge_unchanged = state
+            .bridge()
+            .as_ref()
+            .is_some_and(|current| current.connection_id() == bridge_id.as_str());
+        let bridge_alive = !bridge.is_terminated();
+
+        {
+            let _entered = runtime.enter();
+            bridge.stop();
+        }
+        drop(runtime);
+
+        assert_eq!(
+            stale_open.expect_err("stale open must be rejected").code,
+            crate::error::ErrorCode::StaleSession
+        );
+        assert_eq!(
+            stale_create
+                .expect_err("stale create must be rejected")
+                .code,
+            crate::error::ErrorCode::StaleSession
+        );
+        assert_eq!(
+            stale_close.expect_err("stale close must be rejected").code,
+            crate::error::ErrorCode::StaleSession
+        );
+        assert!(!create_root.exists());
+        assert_eq!(state.generation(), generation);
+        assert_eq!(state.current_project_id(), Some(project_id));
+        assert_eq!(after, before);
+        assert!(bridge_unchanged);
+        assert!(bridge_alive);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_open_does_not_retire_current_bridge_or_project() {
+        let (state, root, project_id, _) = dispatch_fixture();
+        let generation = state.generation();
+        let before = state.status().expect("status before failed open");
+        let (bridge, runtime) = install_fixture_bridge(&state, &root);
+        let bridge_id = bridge.connection_id().to_owned();
+        let missing_root = root.join("missing-project.cutproj");
+
+        let result = state.open_project_at(&missing_root, generation, None, None);
+        let after = state.status().expect("status after failed open");
+        let bridge_unchanged = state
+            .bridge()
+            .as_ref()
+            .is_some_and(|current| current.connection_id() == bridge_id.as_str());
+        let bridge_alive = !bridge.is_terminated();
+
+        {
+            let _entered = runtime.enter();
+            bridge.stop();
+        }
+        drop(runtime);
+
+        assert!(result.is_err());
+        assert_eq!(state.generation(), generation);
+        assert_eq!(state.current_project_id(), Some(project_id));
+        assert_eq!(after, before);
+        assert!(bridge_unchanged);
+        assert!(bridge_alive);
     }
 }
