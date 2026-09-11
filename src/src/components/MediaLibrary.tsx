@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, FileAudio, FileImage, FileVideo, FolderPlus, MoreHorizontal, Plus, RefreshCw, Search, Trash2, Upload, Video } from "lucide-react";
 
 import type { EditorClient, ProjectSnapshot } from "@cutterhoochee/shared";
@@ -16,7 +16,7 @@ type ThumbnailPreview = {
 
 const THUMBNAIL_CONCURRENCY = 2;
 
-export function MediaLibrary({
+export const MediaLibrary = memo(function MediaLibrary({
   client,
   snapshot,
   onRefresh,
@@ -244,7 +244,7 @@ export function MediaLibrary({
       <div className="panel-footnote"><span className="status-dot" />Assets are managed inside this project. Originals are never deleted.</div>
     </div>
   );
-}
+});
 
 function formatMilliseconds(value: number): string {
   const seconds = Math.max(0, value / 1000);

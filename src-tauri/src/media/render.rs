@@ -17,7 +17,7 @@ use crate::project::model::{FitMode, RgbaColor, TextStyle, AUDIO_SAMPLE_RATE};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -345,6 +345,169 @@ struct RuntimeInner {
     transport_generation: AtomicU64,
     playing: AtomicBool,
     software: Mutex<Option<SoftwarePreviewSession>>,
+    frame_cache: Mutex<RenderFrameArtifactCache>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderFrameCacheKey {
+    project_id: String,
+    revision: u64,
+    plan_hash: String,
+    frame: u64,
+}
+
+impl RenderFrameCacheKey {
+    fn new(plan: &RenderPlan, frame: u64) -> Self {
+        Self {
+            project_id: plan.project_id.clone(),
+            revision: plan.revision,
+            plan_hash: plan.plan_hash.clone(),
+            frame,
+        }
+    }
+
+    fn storage_key(&self) -> String {
+        format!(
+            "frame:{}:{}:{}:{}",
+            self.project_id, self.revision, self.plan_hash, self.frame
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderFrameCacheCandidate {
+    artifact_id: String,
+    artifact_len: u64,
+}
+
+struct RenderFrameArtifactCacheEntry {
+    key: RenderFrameCacheKey,
+    artifact_id: String,
+    artifact_len: u64,
+    bytes: usize,
+}
+
+#[derive(Default)]
+struct RenderFrameArtifactCache {
+    epoch: u64,
+    entries: VecDeque<RenderFrameArtifactCacheEntry>,
+    bytes: usize,
+}
+
+impl RenderFrameArtifactCache {
+    fn candidate(&self, key: &RenderFrameCacheKey) -> (u64, Option<RenderFrameCacheCandidate>) {
+        (
+            self.epoch,
+            self.entries
+                .iter()
+                .find(|entry| entry.key.eq(key))
+                .map(|entry| RenderFrameCacheCandidate {
+                    artifact_id: entry.artifact_id.clone(),
+                    artifact_len: entry.artifact_len,
+                }),
+        )
+    }
+
+    fn confirm_hit(
+        &mut self,
+        key: &RenderFrameCacheKey,
+        epoch: u64,
+        artifact_id: &str,
+        artifact_len: u64,
+    ) -> bool {
+        if self.epoch != epoch {
+            return false;
+        }
+        let Some(index) = self.entries.iter().position(|entry| {
+            entry.key.eq(key)
+                && entry.artifact_id == artifact_id
+                && entry.artifact_len == artifact_len
+        }) else {
+            return false;
+        };
+        if index != 0 {
+            if let Some(entry) = self.entries.remove(index) {
+                self.entries.push_front(entry);
+            }
+        }
+        true
+    }
+
+    fn evict_if_matches(
+        &mut self,
+        key: &RenderFrameCacheKey,
+        epoch: u64,
+        artifact_id: &str,
+        artifact_len: u64,
+    ) {
+        if self.epoch != epoch {
+            return;
+        }
+        let Some(index) = self.entries.iter().position(|entry| {
+            entry.key.eq(key)
+                && entry.artifact_id == artifact_id
+                && entry.artifact_len == artifact_len
+        }) else {
+            return;
+        };
+        if let Some(entry) = self.entries.remove(index) {
+            self.bytes = self.bytes.saturating_sub(entry.bytes);
+        }
+    }
+
+    fn insert_if_current(
+        &mut self,
+        key: RenderFrameCacheKey,
+        artifact_id: String,
+        artifact_len: u64,
+        epoch: u64,
+    ) {
+        if self.epoch != epoch || artifact_len == 0 {
+            return;
+        }
+        let Some(bytes) = key
+            .project_id
+            .len()
+            .checked_add(key.plan_hash.len())
+            .and_then(|value| value.checked_add(artifact_id.len()))
+        else {
+            return;
+        };
+        if bytes > MAX_RENDER_FRAME_CACHE_BYTES {
+            return;
+        }
+        if let Some(index) = self.entries.iter().position(|entry| entry.key.eq(&key)) {
+            if let Some(entry) = self.entries.remove(index) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+            }
+        }
+        while self.entries.len() >= MAX_RENDER_FRAME_CACHE_ENTRIES
+            || self.bytes.saturating_add(bytes) > MAX_RENDER_FRAME_CACHE_BYTES
+        {
+            let Some(entry) = self.entries.pop_back() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(entry.bytes);
+        }
+        if self.entries.len() >= MAX_RENDER_FRAME_CACHE_ENTRIES
+            || self.bytes.saturating_add(bytes) > MAX_RENDER_FRAME_CACHE_BYTES
+        {
+            return;
+        }
+        self.bytes += bytes;
+        self.entries.push_front(RenderFrameArtifactCacheEntry {
+            key,
+            artifact_id,
+            artifact_len,
+            bytes,
+        });
+    }
+
+    fn invalidate(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+        self.epoch = self.epoch.wrapping_add(1);
+    }
 }
 
 #[derive(Clone)]
@@ -369,6 +532,7 @@ impl RenderRuntime {
                 transport_generation: AtomicU64::new(0),
                 playing: AtomicBool::new(false),
                 software: Mutex::new(None),
+                frame_cache: Mutex::new(RenderFrameArtifactCache::default()),
             }),
         }
     }
@@ -380,7 +544,7 @@ impl RenderRuntime {
             .lock()
             .map_err(|_| AppError::io("The renderer artifact lock is unavailable"))? =
             Some(artifacts);
-        Ok(())
+        self.invalidate_frame_cache()
     }
 
     pub fn set_toolchain(&self, toolchain: FfmpegToolchain) -> Result<(), AppError> {
@@ -389,7 +553,143 @@ impl RenderRuntime {
             .toolchain
             .lock()
             .map_err(|_| AppError::io("The renderer toolchain lock is unavailable"))? = toolchain;
+        self.invalidate_frame_cache()
+    }
+
+    fn invalidate_frame_cache(&self) -> Result<(), AppError> {
+        self.inner
+            .frame_cache
+            .lock()
+            .map_err(|_| AppError::io("The rendered-frame cache lock is unavailable"))?
+            .invalidate();
         Ok(())
+    }
+
+    fn frame_cache_candidate(
+        &self,
+        key: &RenderFrameCacheKey,
+    ) -> Result<(u64, Option<RenderFrameCacheCandidate>), AppError> {
+        Ok(self
+            .inner
+            .frame_cache
+            .lock()
+            .map_err(|_| AppError::io("The rendered-frame cache lock is unavailable"))?
+            .candidate(key))
+    }
+
+    fn frame_cache_confirm_hit(
+        &self,
+        key: &RenderFrameCacheKey,
+        epoch: u64,
+        artifact_id: &str,
+        artifact_len: u64,
+    ) -> Result<bool, AppError> {
+        Ok(self
+            .inner
+            .frame_cache
+            .lock()
+            .map_err(|_| AppError::io("The rendered-frame cache lock is unavailable"))?
+            .confirm_hit(key, epoch, artifact_id, artifact_len))
+    }
+
+    fn frame_cache_evict(
+        &self,
+        key: &RenderFrameCacheKey,
+        epoch: u64,
+        artifact_id: &str,
+        artifact_len: u64,
+    ) -> Result<(), AppError> {
+        self.inner
+            .frame_cache
+            .lock()
+            .map_err(|_| AppError::io("The rendered-frame cache lock is unavailable"))?
+            .evict_if_matches(key, epoch, artifact_id, artifact_len);
+        Ok(())
+    }
+
+    fn frame_cache_insert(
+        &self,
+        key: RenderFrameCacheKey,
+        artifact_id: String,
+        artifact_len: u64,
+        epoch: u64,
+    ) -> Result<(), AppError> {
+        self.inner
+            .frame_cache
+            .lock()
+            .map_err(|_| AppError::io("The rendered-frame cache lock is unavailable"))?
+            .insert_if_current(key, artifact_id, artifact_len, epoch);
+        Ok(())
+    }
+
+    fn cached_frame_artifact(
+        &self,
+        plan: &RenderPlan,
+        frame: u64,
+        artifacts: &dyn ArtifactResolver,
+    ) -> Result<(u64, Option<String>), AppError> {
+        let key = RenderFrameCacheKey::new(plan, frame);
+        let (epoch, candidate) = self.frame_cache_candidate(&key)?;
+        let Some(candidate) = candidate else {
+            return Ok((epoch, None));
+        };
+        if !validate_cached_frame_artifact(
+            artifacts,
+            &candidate.artifact_id,
+            candidate.artifact_len,
+            plan.width,
+            plan.height,
+        ) {
+            self.frame_cache_evict(&key, epoch, &candidate.artifact_id, candidate.artifact_len)?;
+            return Ok((epoch, None));
+        }
+        if self.frame_cache_confirm_hit(
+            &key,
+            epoch,
+            &candidate.artifact_id,
+            candidate.artifact_len,
+        )? {
+            Ok((epoch, Some(candidate.artifact_id)))
+        } else {
+            Ok((epoch, None))
+        }
+    }
+
+    fn render_frame_artifact(
+        &self,
+        plan: &RenderPlan,
+        frame: u64,
+        artifacts: &dyn ArtifactResolver,
+        toolchain: &FfmpegToolchain,
+    ) -> Result<String, AppError> {
+        if frame >= plan.duration_frames {
+            return Err(AppError::invalid_argument(
+                "The requested frame is outside the render plan",
+            ));
+        }
+        let key = RenderFrameCacheKey::new(plan, frame);
+        let (epoch, cached) = self.cached_frame_artifact(plan, frame, artifacts)?;
+        if let Some(artifact_id) = cached {
+            return Ok(artifact_id);
+        }
+        let bytes = render_rgba_frame(plan, frame, artifacts, toolchain)?;
+        let png = encode_rgba_png(plan.width, plan.height, &bytes)?;
+        let artifact_len = png.len() as u64;
+        let artifact_id = artifacts.put_bytes(&key.storage_key(), "png", "image/png", &png)?;
+        if !validate_cached_frame_artifact(
+            artifacts,
+            &artifact_id,
+            artifact_len,
+            plan.width,
+            plan.height,
+        ) {
+            return Err(AppError::new(
+                ErrorCode::AssetUnavailable,
+                "The rendered frame artifact is unavailable",
+            ));
+        }
+        self.frame_cache_insert(key, artifact_id.clone(), artifact_len, epoch)?;
+        Ok(artifact_id)
     }
 
     fn artifacts(&self) -> Result<Arc<dyn ArtifactResolver>, AppError> {
@@ -421,6 +721,7 @@ impl RenderRuntime {
             &snapshot.document,
             self.artifacts()?.as_ref(),
         )?;
+        self.invalidate_frame_cache()?;
         *self
             .inner
             .plan
@@ -493,22 +794,10 @@ impl RenderRuntime {
             }
             PreviewAction::RenderFrame { revision, frame } => {
                 let plan = self.current_plan(state, generation, revision)?;
-                let bytes = render_rgba_frame(
-                    &plan,
-                    frame,
-                    self.artifacts()?.as_ref(),
-                    &self.toolchain()?,
-                )?;
-                let key = format!(
-                    "frame:{}:{}:{}:{}",
-                    plan.project_id, plan.revision, plan.plan_hash, frame
-                );
-                let artifact_id = self.artifacts()?.put_bytes(
-                    &key,
-                    "png",
-                    "image/png",
-                    &encode_rgba_png(plan.width, plan.height, &bytes)?,
-                )?;
+                let artifacts = self.artifacts()?;
+                let toolchain = self.toolchain()?;
+                let artifact_id =
+                    self.render_frame_artifact(&plan, frame, artifacts.as_ref(), &toolchain)?;
                 Ok(PreviewReply::Frame(PreviewFrameReply {
                     revision,
                     frame,
@@ -603,17 +892,8 @@ impl RenderRuntime {
                 let toolchain = self.toolchain()?;
                 let mut results = Vec::with_capacity(frames.len());
                 for frame in frames {
-                    let bytes = render_rgba_frame(&plan, frame, artifacts.as_ref(), &toolchain)?;
-                    let key = format!(
-                        "inspect:{}:{}:{}:{}",
-                        plan.project_id, plan.revision, plan.plan_hash, frame
-                    );
-                    let artifact_id = artifacts.put_bytes(
-                        &key,
-                        "png",
-                        "image/png",
-                        &encode_rgba_png(plan.width, plan.height, &bytes)?,
-                    )?;
+                    let artifact_id =
+                        self.render_frame_artifact(&plan, frame, artifacts.as_ref(), &toolchain)?;
                     results.push(PreviewInspectFrame { frame, artifact_id });
                 }
                 Ok(PreviewReply::Inspect {
@@ -776,6 +1056,7 @@ impl RenderRuntime {
             .lock()
             .map_err(|_| AppError::io("The renderer toolchain lock is unavailable"))? =
             FfmpegToolchain::default();
+        self.invalidate_frame_cache()?;
         Ok(())
     }
 }
@@ -786,10 +1067,11 @@ pub struct RenderCapture {
     pub artifacts: Arc<dyn ArtifactResolver>,
     pub toolchain: FfmpegToolchain,
 }
-
 #[derive(Default)]
 struct RenderScratch {
     canvas: Vec<PmPixel>,
+    transition_left: Vec<u8>,
+    transition_right: Vec<u8>,
 }
 
 /// A pooled canonical frame renderer.  One decoder process is retained per
@@ -822,6 +1104,12 @@ impl CanonicalFrameRenderer {
     }
 
     pub fn render(&self, frame: u64) -> Result<Vec<u8>, AppError> {
+        let mut rgba = Vec::new();
+        self.render_into(frame, &mut rgba)?;
+        Ok(rgba)
+    }
+
+    pub fn render_into(&self, frame: u64, packed_rgba: &mut Vec<u8>) -> Result<(), AppError> {
         if frame >= self.plan.duration_frames {
             return Err(AppError::invalid_argument(
                 "The requested frame is outside the render plan",
@@ -835,15 +1123,16 @@ impl CanonicalFrameRenderer {
             .scratch
             .lock()
             .map_err(|_| AppError::io("The pooled renderer scratch lock is unavailable"))?;
-        let mut packed_rgba = Vec::new();
-        let rgba = render_rgba_frame_with_pool(
+        let scratch = &mut *scratch;
+        render_rgba_frame_with_pool(
             &self.plan,
             frame,
             &mut pool,
             &mut scratch.canvas,
-            &mut packed_rgba,
-        )?;
-        Ok(rgba)
+            &mut scratch.transition_left,
+            &mut scratch.transition_right,
+            packed_rgba,
+        )
     }
 }
 
@@ -878,24 +1167,14 @@ pub fn render_rgba_frame(
             "The requested frame is outside the render plan",
         ));
     }
-    let canvas_len = usize::try_from(plan.width)
-        .ok()
-        .and_then(|width| {
-            usize::try_from(plan.height)
-                .ok()
-                .and_then(|height| width.checked_mul(height))
-        })
-        .ok_or_else(|| AppError::invalid_argument("Render canvas is too large"))?;
+    let canvas_len = canvas_len(plan)?;
     let background = PmPixel::from_color(plan.background);
     let mut canvas = vec![background; canvas_len];
     for layer in &plan.layers {
         if layer.kind == RenderLayerKind::Video {
-            let mut transitioned = HashSet::new();
             for transition in layer.transitions.iter().filter(|transition| {
                 transition.start_frame <= frame && frame < transition.end_frame
             }) {
-                transitioned.insert(transition.left_clip_id.as_str());
-                transitioned.insert(transition.right_clip_id.as_str());
                 let left = layer
                     .segments
                     .iter()
@@ -906,27 +1185,40 @@ pub fn render_rgba_frame(
                     .iter()
                     .find(|segment| segment.clip_id == transition.right_clip_id)
                     .ok_or_else(|| AppError::schema("A render transition has no right segment"))?;
-                let left_layer = compose_segment(plan, left, frame, artifacts, toolchain)?;
-                let right_layer = compose_segment(plan, right, frame, artifacts, toolchain)?;
-                let relative = frame - transition.start_frame;
-                let mut group = vec![PmPixel::transparent(); canvas_len];
-                for index in 0..canvas_len {
-                    group[index] = PmPixel::weighted_pair(
-                        left_layer[index],
-                        right_layer[index],
-                        relative,
-                        transition.duration_frames,
-                    );
-                }
-                blend_buffer(&mut canvas, &group);
+                compose_transition_into(
+                    plan,
+                    transition,
+                    left,
+                    right,
+                    frame,
+                    artifacts,
+                    toolchain,
+                    &mut canvas,
+                )?;
             }
             for segment in &layer.segments {
-                if transitioned.contains(segment.clip_id.as_str()) {
-                    continue;
-                }
-                if segment.start_frame <= frame && frame < segment.end_frame {
-                    let image = compose_segment(plan, segment, frame, artifacts, toolchain)?;
-                    blend_buffer(&mut canvas, &image);
+                let in_transition = layer.transitions.iter().any(|transition| {
+                    transition.start_frame <= frame
+                        && frame < transition.end_frame
+                        && (transition.left_clip_id == segment.clip_id
+                            || transition.right_clip_id == segment.clip_id)
+                });
+                if !in_transition {
+                    if let Some(source) =
+                        decode_segment_source(plan, segment, frame, artifacts, toolchain)?
+                    {
+                        blit_source(
+                            &mut canvas,
+                            plan.width,
+                            plan.height,
+                            &source,
+                            segment.source_width,
+                            segment.source_height,
+                            &segment.source_rect,
+                            &segment.dest_rect,
+                            segment.opacity,
+                        );
+                    }
                 }
             }
         }
@@ -935,26 +1227,22 @@ pub fn render_rgba_frame(
             .iter()
             .filter(|overlay| overlay.start_frame <= frame && frame < overlay.end_frame)
         {
-            let image = compose_text_overlay(plan, overlay, frame, artifacts)?;
-            blend_buffer(&mut canvas, &image);
+            compose_text_overlay(plan, overlay, artifacts, &mut canvas)?;
         }
     }
-    let mut rgba = Vec::with_capacity(canvas_len * 4);
-    for pixel in canvas {
-        rgba.extend_from_slice(&pixel.to_straight_rgba());
+    let packed_len = canvas_len
+        .checked_mul(4)
+        .ok_or_else(|| AppError::invalid_argument("Render canvas is too large"))?;
+    let mut rgba = vec![0u8; packed_len];
+    for (chunk, pixel) in rgba.chunks_exact_mut(4).zip(canvas) {
+        chunk.copy_from_slice(&pixel.to_straight_rgba());
     }
     Ok(rgba)
 }
 
-fn compose_segment(
-    plan: &RenderPlan,
-    segment: &RenderSegment,
-    frame: u64,
-    artifacts: &dyn ArtifactResolver,
-    toolchain: &FfmpegToolchain,
-) -> Result<Vec<PmPixel>, AppError> {
+fn segment_source_frame(segment: &RenderSegment, frame: u64) -> Result<Option<u64>, AppError> {
     if frame < segment.start_frame || frame >= segment.end_frame {
-        return Ok(vec![PmPixel::transparent(); canvas_len(plan)?]);
+        return Ok(None);
     }
     let source_frame = if segment.is_still_image {
         segment.source_start_frame
@@ -965,38 +1253,98 @@ fn compose_segment(
             .ok_or_else(|| AppError::invalid_argument("Source frame mapping overflowed"))?
     };
     if source_frame < segment.active_start_frame || source_frame >= segment.active_end_frame {
-        return Ok(vec![PmPixel::transparent(); canvas_len(plan)?]);
+        return Ok(None);
     }
+    Ok(Some(source_frame))
+}
+
+fn decode_segment_source(
+    plan: &RenderPlan,
+    segment: &RenderSegment,
+    frame: u64,
+    artifacts: &dyn ArtifactResolver,
+    toolchain: &FfmpegToolchain,
+) -> Result<Option<Vec<u8>>, AppError> {
+    let Some(source_frame) = segment_source_frame(segment, frame)? else {
+        return Ok(None);
+    };
     let master = artifacts.managed_path(&segment.artifact_id)?;
-    let source = decode_rgba_frame(
+    decode_rgba_frame(
         toolchain,
         &master,
         source_frame,
         plan.fps(),
         segment.source_width,
         segment.source_height,
-    )?;
-    let mut output = vec![PmPixel::transparent(); canvas_len(plan)?];
-    blit_source(
-        &mut output,
+    )
+    .map(Some)
+}
+
+fn compose_transition_into(
+    plan: &RenderPlan,
+    transition: &RenderTransition,
+    left: &RenderSegment,
+    right: &RenderSegment,
+    frame: u64,
+    artifacts: &dyn ArtifactResolver,
+    toolchain: &FfmpegToolchain,
+    destination: &mut [PmPixel],
+) -> Result<(), AppError> {
+    let left_source = decode_segment_source(plan, left, frame, artifacts, toolchain)?;
+    let right_source = decode_segment_source(plan, right, frame, artifacts, toolchain)?;
+    let left_source = left_source.as_deref().map(|pixels| TransitionSource {
+        pixels,
+        source_width: left.source_width,
+        source_height: left.source_height,
+        source_rect: &left.source_rect,
+        dest_rect: &left.dest_rect,
+        opacity: left.opacity,
+    });
+    let right_source = right_source.as_deref().map(|pixels| TransitionSource {
+        pixels,
+        source_width: right.source_width,
+        source_height: right.source_height,
+        source_rect: &right.source_rect,
+        dest_rect: &right.dest_rect,
+        opacity: right.opacity,
+    });
+    blend_transition_sources(
+        destination,
         plan.width,
         plan.height,
-        &source,
-        segment.source_width,
-        segment.source_height,
-        &segment.source_rect,
-        &segment.dest_rect,
-        segment.opacity,
+        left_source,
+        right_source,
+        frame - transition.start_frame,
+        transition.duration_frames,
     );
-    Ok(output)
+    Ok(())
 }
 
 fn compose_text_overlay(
     plan: &RenderPlan,
     overlay: &RenderTextOverlay,
-    _frame: u64,
     artifacts: &dyn ArtifactResolver,
-) -> Result<Vec<PmPixel>, AppError> {
+    destination: &mut [PmPixel],
+) -> Result<(), AppError> {
+    let (width, height, pixels) = load_text_overlay(overlay, artifacts)?;
+    blit_source(
+        destination,
+        plan.width,
+        plan.height,
+        &pixels,
+        width,
+        height,
+        &overlay.raster_source_rect,
+        &overlay.raster_dest_rect,
+        10_000,
+    );
+    Ok(())
+}
+
+fn load_text_overlay(
+    overlay: &RenderTextOverlay,
+    artifacts: &dyn ArtifactResolver,
+) -> Result<(u32, u32, Vec<u8>), AppError> {
     let path = artifacts.managed_path(&overlay.raster_artifact_id)?;
     let mut file = File::open(&path).map_err(|_| {
         AppError::new(
@@ -1040,20 +1388,7 @@ fn compose_text_overlay(
             "The raster PNG exceeds the supported size",
         ));
     }
-    let (width, height, pixels) = decode_rgba_png(&bytes)?;
-    let mut output = vec![PmPixel::transparent(); canvas_len(plan)?];
-    blit_source(
-        &mut output,
-        plan.width,
-        plan.height,
-        &pixels,
-        width,
-        height,
-        &overlay.raster_source_rect,
-        &overlay.raster_dest_rect,
-        10_000,
-    );
-    Ok(output)
+    decode_rgba_png(&bytes)
 }
 
 fn canvas_len(plan: &RenderPlan) -> Result<usize, AppError> {
@@ -1067,6 +1402,64 @@ fn canvas_len(plan: &RenderPlan) -> Result<usize, AppError> {
         .ok_or_else(|| AppError::invalid_argument("Render canvas is too large"))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BlitBounds {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
+
+impl BlitBounds {
+    fn new(
+        canvas_width: u32,
+        canvas_height: u32,
+        source_rect: &SourceRect,
+        dest_rect: &DestRect,
+    ) -> Option<Self> {
+        let x0 = i64::from(dest_rect.x).max(0) as u32;
+        let y0 = i64::from(dest_rect.y).max(0) as u32;
+        let x1 = (i64::from(dest_rect.x) + i64::from(dest_rect.width))
+            .min(i64::from(canvas_width))
+            .max(0) as u32;
+        let y1 = (i64::from(dest_rect.y) + i64::from(dest_rect.height))
+            .min(i64::from(canvas_height))
+            .max(0) as u32;
+        (x1 > x0 && y1 > y0 && source_rect.width > 0 && source_rect.height > 0).then_some(Self {
+            x0,
+            y0,
+            x1,
+            y1,
+        })
+    }
+}
+
+#[inline]
+fn mapped_source_x(source_rect: &SourceRect, dest_rect: &DestRect, x: u32) -> usize {
+    let rel_x = (i64::from(x) - i64::from(dest_rect.x)).max(0) as u64;
+    (u64::from(source_rect.x)
+        + rel_x.saturating_mul(u64::from(source_rect.width)) / u64::from(dest_rect.width.max(1)))
+    .min(u64::from(
+        source_rect
+            .x
+            .saturating_add(source_rect.width)
+            .saturating_sub(1),
+    )) as usize
+}
+
+#[inline]
+fn mapped_source_y(source_rect: &SourceRect, dest_rect: &DestRect, y: u32) -> usize {
+    let rel_y = (i64::from(y) - i64::from(dest_rect.y)).max(0) as u64;
+    (u64::from(source_rect.y)
+        + rel_y.saturating_mul(u64::from(source_rect.height)) / u64::from(dest_rect.height.max(1)))
+    .min(u64::from(
+        source_rect
+            .y
+            .saturating_add(source_rect.height)
+            .saturating_sub(1),
+    )) as usize
+}
+
 fn blit_source(
     destination: &mut [PmPixel],
     canvas_width: u32,
@@ -1078,47 +1471,35 @@ fn blit_source(
     dest_rect: &DestRect,
     opacity: u16,
 ) {
-    let x0 = i64::from(dest_rect.x).max(0) as u32;
-    let y0 = i64::from(dest_rect.y).max(0) as u32;
-    let x1 = (i64::from(dest_rect.x) + i64::from(dest_rect.width))
-        .min(i64::from(canvas_width))
-        .max(0) as u32;
-    let y1 = (i64::from(dest_rect.y) + i64::from(dest_rect.height))
-        .min(i64::from(canvas_height))
-        .max(0) as u32;
-    if x1 <= x0 || y1 <= y0 || source_rect.width == 0 || source_rect.height == 0 {
+    let Some(bounds) = BlitBounds::new(canvas_width, canvas_height, source_rect, dest_rect) else {
         return;
-    }
-    let source_columns: Vec<usize> = (x0..x1)
-        .map(|x| {
-            let rel_x = (i64::from(x) - i64::from(dest_rect.x)).max(0) as u64;
-            (u64::from(source_rect.x)
-                + rel_x.saturating_mul(u64::from(source_rect.width))
-                    / u64::from(dest_rect.width.max(1)))
-            .min(u64::from(
-                source_rect
-                    .x
-                    .saturating_add(source_rect.width)
-                    .saturating_sub(1),
-            )) as usize
-        })
-        .collect();
-    for y in y0..y1 {
-        let rel_y = (i64::from(y) - i64::from(dest_rect.y)).max(0) as u64;
-        let sy = (u64::from(source_rect.y)
-            + rel_y.saturating_mul(u64::from(source_rect.height))
-                / u64::from(dest_rect.height.max(1)))
-        .min(u64::from(
-            source_rect
-                .y
-                .saturating_add(source_rect.height)
-                .saturating_sub(1),
-        ));
-        let source_row = sy as usize * source_width as usize;
-        let destination_row = y as usize * canvas_width as usize + x0 as usize;
-        for (column, &sx) in source_columns.iter().enumerate() {
-            let source_index = (source_row + sx) * 4;
-            if source_index + 3 >= source.len() {
+    };
+    let source_columns = (bounds.x0..bounds.x1)
+        .map(|x| mapped_source_x(source_rect, dest_rect, x))
+        .collect::<Vec<_>>();
+    for y in bounds.y0..bounds.y1 {
+        let source_y = mapped_source_y(source_rect, dest_rect, y);
+        if source_y >= source_height as usize {
+            continue;
+        }
+        let Some(source_row) = source_y.checked_mul(source_width as usize) else {
+            continue;
+        };
+        let destination_row = y as usize * canvas_width as usize;
+        for (column, source_x) in source_columns.iter().copied().enumerate() {
+            if source_x >= source_width as usize {
+                continue;
+            }
+            let Some(source_index) = source_row
+                .checked_add(source_x)
+                .and_then(|index| index.checked_mul(4))
+            else {
+                continue;
+            };
+            let Some(source_end) = source_index.checked_add(3) else {
+                continue;
+            };
+            if source_end >= source.len() {
                 continue;
             }
             let pixel = PmPixel::from_rgba(
@@ -1128,15 +1509,186 @@ fn blit_source(
                 source[source_index + 3],
                 opacity,
             );
-            let destination_index = destination_row + column;
+            let destination_index = destination_row + bounds.x0 as usize + column;
             destination[destination_index] = destination[destination_index].over(pixel);
         }
     }
 }
 
-fn blend_buffer(destination: &mut [PmPixel], source: &[PmPixel]) {
-    for (dst, src) in destination.iter_mut().zip(source.iter().copied()) {
-        *dst = dst.over(src);
+fn blit_premultiplied(
+    destination: &mut [PmPixel],
+    canvas_width: u32,
+    canvas_height: u32,
+    source: &[PmPixel],
+    source_width: u32,
+    source_height: u32,
+    source_rect: &SourceRect,
+    dest_rect: &DestRect,
+) {
+    let Some(bounds) = BlitBounds::new(canvas_width, canvas_height, source_rect, dest_rect) else {
+        return;
+    };
+    let source_columns = (bounds.x0..bounds.x1)
+        .map(|x| mapped_source_x(source_rect, dest_rect, x))
+        .collect::<Vec<_>>();
+    for y in bounds.y0..bounds.y1 {
+        let source_y = mapped_source_y(source_rect, dest_rect, y);
+        if source_y >= source_height as usize {
+            continue;
+        }
+        let Some(source_row) = source_y.checked_mul(source_width as usize) else {
+            continue;
+        };
+        let destination_row = y as usize * canvas_width as usize;
+        for (column, source_x) in source_columns.iter().copied().enumerate() {
+            if source_x >= source_width as usize {
+                continue;
+            }
+            let Some(source_index) = source_row.checked_add(source_x) else {
+                continue;
+            };
+            let Some(&pixel) = source.get(source_index) else {
+                continue;
+            };
+            let destination_index = destination_row + bounds.x0 as usize + column;
+            destination[destination_index] = destination[destination_index].over(pixel);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TransitionSource<'a> {
+    pixels: &'a [u8],
+    source_width: u32,
+    source_height: u32,
+    source_rect: &'a SourceRect,
+    dest_rect: &'a DestRect,
+    opacity: u16,
+}
+
+#[inline]
+fn transition_pixel_mapped(
+    source: TransitionSource<'_>,
+    source_x: usize,
+    source_y: usize,
+) -> PmPixel {
+    if source_x >= source.source_width as usize || source_y >= source.source_height as usize {
+        return PmPixel::transparent();
+    }
+    let Some(source_index) = source_y
+        .checked_mul(source.source_width as usize)
+        .and_then(|row| row.checked_add(source_x))
+        .and_then(|index| index.checked_mul(4))
+    else {
+        return PmPixel::transparent();
+    };
+    let Some(source_end) = source_index.checked_add(3) else {
+        return PmPixel::transparent();
+    };
+    if source_end >= source.pixels.len() {
+        return PmPixel::transparent();
+    }
+    PmPixel::from_rgba(
+        source.pixels[source_index],
+        source.pixels[source_index + 1],
+        source.pixels[source_index + 2],
+        source.pixels[source_index + 3],
+        source.opacity,
+    )
+}
+
+fn blend_transition_sources(
+    destination: &mut [PmPixel],
+    canvas_width: u32,
+    canvas_height: u32,
+    left: Option<TransitionSource<'_>>,
+    right: Option<TransitionSource<'_>>,
+    relative: u64,
+    duration: u64,
+) {
+    let left_bounds = left.and_then(|source| {
+        BlitBounds::new(
+            canvas_width,
+            canvas_height,
+            source.source_rect,
+            source.dest_rect,
+        )
+    });
+    let right_bounds = right.and_then(|source| {
+        BlitBounds::new(
+            canvas_width,
+            canvas_height,
+            source.source_rect,
+            source.dest_rect,
+        )
+    });
+    let Some((x0, y0, x1, y1)) = union_bounds(left_bounds, right_bounds) else {
+        return;
+    };
+    let left_columns = left.zip(left_bounds).map(|(source, bounds)| {
+        (bounds.x0..bounds.x1)
+            .map(|x| mapped_source_x(source.source_rect, source.dest_rect, x))
+            .collect::<Vec<_>>()
+    });
+    let right_columns = right.zip(right_bounds).map(|(source, bounds)| {
+        (bounds.x0..bounds.x1)
+            .map(|x| mapped_source_x(source.source_rect, source.dest_rect, x))
+            .collect::<Vec<_>>()
+    });
+    for y in y0..y1 {
+        let left_source_y = left.zip(left_bounds).and_then(|(source, bounds)| {
+            (y >= bounds.y0 && y < bounds.y1)
+                .then(|| mapped_source_y(source.source_rect, source.dest_rect, y))
+        });
+        let right_source_y = right.zip(right_bounds).and_then(|(source, bounds)| {
+            (y >= bounds.y0 && y < bounds.y1)
+                .then(|| mapped_source_y(source.source_rect, source.dest_rect, y))
+        });
+        let destination_row = y as usize * canvas_width as usize;
+        for x in x0..x1 {
+            let left_pixel = match (left, left_bounds, left_source_y, left_columns.as_deref()) {
+                (Some(source), Some(bounds), Some(source_y), Some(columns))
+                    if x >= bounds.x0 && x < bounds.x1 =>
+                {
+                    transition_pixel_mapped(source, columns[(x - bounds.x0) as usize], source_y)
+                }
+                _ => PmPixel::transparent(),
+            };
+            let right_pixel = match (
+                right,
+                right_bounds,
+                right_source_y,
+                right_columns.as_deref(),
+            ) {
+                (Some(source), Some(bounds), Some(source_y), Some(columns))
+                    if x >= bounds.x0 && x < bounds.x1 =>
+                {
+                    transition_pixel_mapped(source, columns[(x - bounds.x0) as usize], source_y)
+                }
+                _ => PmPixel::transparent(),
+            };
+            let blended = PmPixel::weighted_pair(left_pixel, right_pixel, relative, duration);
+            let destination_index = destination_row + x as usize;
+            destination[destination_index] = destination[destination_index].over(blended);
+        }
+    }
+}
+
+fn union_bounds(
+    left: Option<BlitBounds>,
+    right: Option<BlitBounds>,
+) -> Option<(u32, u32, u32, u32)> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some((
+            left.x0.min(right.x0),
+            left.y0.min(right.y0),
+            left.x1.max(right.x1),
+            left.y1.max(right.y1),
+        )),
+        (Some(bounds), None) | (None, Some(bounds)) => {
+            Some((bounds.x0, bounds.y0, bounds.x1, bounds.y1))
+        }
+        (None, None) => None,
     }
 }
 
@@ -1350,6 +1902,39 @@ const MAX_RASTER_PNG_DIMENSION: u32 = 4_096;
 const MAX_RASTER_PNG_PIXELS: u64 = 16_000_000;
 const MAX_TEXT_RASTER_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXT_RASTER_CACHE_ENTRIES: usize = 256;
+const MAX_RENDER_FRAME_CACHE_ENTRIES: usize = 32;
+const MAX_RENDER_FRAME_CACHE_BYTES: usize = 64 * 1024;
+
+fn validate_cached_frame_artifact(
+    artifacts: &dyn ArtifactResolver,
+    artifact_id: &str,
+    expected_len: u64,
+    width: u32,
+    height: u32,
+) -> bool {
+    let Ok(path) = artifacts.managed_path(artifact_id) else {
+        return false;
+    };
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() || metadata.len() != expected_len {
+        return false;
+    }
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; 24];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    let width_bytes = [header[16], header[17], header[18], header[19]];
+    let height_bytes = [header[20], header[21], header[22], header[23]];
+    &header[..8] == b"\x89PNG\r\n\x1a\n"
+        && &header[12..16] == b"IHDR"
+        && u32::from_be_bytes(width_bytes) == width
+        && u32::from_be_bytes(height_bytes) == height
+}
 
 fn decode_rgba_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), AppError> {
     if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
@@ -1825,6 +2410,8 @@ fn software_worker(
     };
     let mut canvas = Vec::new();
     let mut packed_rgba = Vec::new();
+    let mut transition_left = Vec::new();
+    let mut transition_right = Vec::new();
     while !cancel.load(Ordering::Acquire) {
         let desired = requested_frame.load(Ordering::Acquire);
         if desired != last_requested_frame {
@@ -1862,21 +2449,23 @@ fn software_worker(
                 return;
             }
         }
-        let rgba = match render_rgba_frame_with_pool(
+        if render_rgba_frame_with_pool(
             &raster_plan,
             current_frame,
             &mut decoder_pool,
             &mut canvas,
+            &mut transition_left,
+            &mut transition_right,
             &mut packed_rgba,
-        ) {
+        )
+        .is_err()
+        {
+            break;
+        }
+        let jpeg = match encoder.encode(&packed_rgba, raster_plan.width, raster_plan.height) {
             Ok(bytes) => bytes,
             Err(_) => break,
         };
-        let jpeg = match encoder.encode(&rgba, raster_plan.width, raster_plan.height) {
-            Ok(bytes) => bytes,
-            Err(_) => break,
-        };
-        packed_rgba = rgba;
         // Do not count decoder/encoder startup against playback time.  The
         // initial frame gates audio in the presentation layer.
         if pace_anchor.is_none() {
@@ -2037,6 +2626,8 @@ impl TextRasterCacheKey {
 
 struct TextRasterCacheEntry {
     key: TextRasterCacheKey,
+    width: u32,
+    height: u32,
     pixels: Vec<PmPixel>,
     bytes: usize,
 }
@@ -2048,7 +2639,11 @@ struct TextRasterCache {
 }
 
 impl TextRasterCache {
-    fn get(&mut self, plan: &RenderPlan, overlay: &RenderTextOverlay) -> Option<&[PmPixel]> {
+    fn get(
+        &mut self,
+        plan: &RenderPlan,
+        overlay: &RenderTextOverlay,
+    ) -> Option<(u32, u32, &[PmPixel])> {
         let index = self
             .entries
             .iter()
@@ -2057,10 +2652,12 @@ impl TextRasterCache {
             let entry = self.entries.remove(index)?;
             self.entries.push_front(entry);
         }
-        self.entries.front().map(|entry| entry.pixels.as_slice())
+        self.entries
+            .front()
+            .map(|entry| (entry.width, entry.height, entry.pixels.as_slice()))
     }
 
-    fn insert(&mut self, key: TextRasterCacheKey, pixels: Vec<PmPixel>) {
+    fn insert(&mut self, key: TextRasterCacheKey, width: u32, height: u32, pixels: Vec<PmPixel>) {
         let Some(bytes) = pixels
             .capacity()
             .checked_mul(std::mem::size_of::<PmPixel>())
@@ -2089,8 +2686,13 @@ impl TextRasterCache {
             return;
         }
         self.bytes += bytes;
-        self.entries
-            .push_front(TextRasterCacheEntry { key, pixels, bytes });
+        self.entries.push_front(TextRasterCacheEntry {
+            key,
+            width,
+            height,
+            pixels,
+            bytes,
+        });
     }
 }
 
@@ -2411,8 +3013,10 @@ fn render_rgba_frame_with_pool(
     frame: u64,
     decoders: &mut PersistentDecoderPool,
     canvas: &mut Vec<PmPixel>,
+    transition_left: &mut Vec<u8>,
+    transition_right: &mut Vec<u8>,
     packed_rgba: &mut Vec<u8>,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<(), AppError> {
     // The persistent decoder path mirrors render_rgba_frame's composition but
     // keeps only active per-clip processes, creating each at its requested
     // source frame.  Keeping this path separate prevents a software fallback
@@ -2424,14 +3028,11 @@ fn render_rgba_frame_with_pool(
     canvas.fill(background);
     for layer in &plan.layers {
         if layer.kind == RenderLayerKind::Video {
-            let mut transitioned = HashSet::new();
             for transition in layer
                 .transitions
                 .iter()
                 .filter(|value| value.start_frame <= frame && frame < value.end_frame)
             {
-                transitioned.insert(transition.left_clip_id.as_str());
-                transitioned.insert(transition.right_clip_id.as_str());
                 let left = layer
                     .segments
                     .iter()
@@ -2442,25 +3043,42 @@ fn render_rgba_frame_with_pool(
                     .iter()
                     .find(|segment| segment.clip_id == transition.right_clip_id)
                     .ok_or_else(|| AppError::schema("A render transition has no right segment"))?;
-                let a = compose_segment_with_pool(plan, left, frame, decoders)?;
-                let b = compose_segment_with_pool(plan, right, frame, decoders)?;
-                let mut group = vec![PmPixel::transparent(); canvas_len];
-                let relative = frame - transition.start_frame;
-                for index in 0..canvas_len {
-                    group[index] = PmPixel::weighted_pair(
-                        a[index],
-                        b[index],
-                        relative,
-                        transition.duration_frames,
-                    );
-                }
-                blend_buffer(canvas, &group);
+                decode_segment_source_into_pool(left, frame, decoders, transition_left)?;
+                decode_segment_source_into_pool(right, frame, decoders, transition_right)?;
+                let left_source = (!transition_left.is_empty()).then_some(TransitionSource {
+                    pixels: transition_left.as_slice(),
+                    source_width: left.source_width,
+                    source_height: left.source_height,
+                    source_rect: &left.source_rect,
+                    dest_rect: &left.dest_rect,
+                    opacity: left.opacity,
+                });
+                let right_source = (!transition_right.is_empty()).then_some(TransitionSource {
+                    pixels: transition_right.as_slice(),
+                    source_width: right.source_width,
+                    source_height: right.source_height,
+                    source_rect: &right.source_rect,
+                    dest_rect: &right.dest_rect,
+                    opacity: right.opacity,
+                });
+                blend_transition_sources(
+                    canvas,
+                    plan.width,
+                    plan.height,
+                    left_source,
+                    right_source,
+                    frame - transition.start_frame,
+                    transition.duration_frames,
+                );
             }
             for segment in &layer.segments {
-                if !transitioned.contains(segment.clip_id.as_str())
-                    && segment.start_frame <= frame
-                    && frame < segment.end_frame
-                {
+                let in_transition = layer.transitions.iter().any(|transition| {
+                    transition.start_frame <= frame
+                        && frame < transition.end_frame
+                        && (transition.left_clip_id == segment.clip_id
+                            || transition.right_clip_id == segment.clip_id)
+                });
+                if !in_transition && segment.start_frame <= frame && frame < segment.end_frame {
                     render_segment_into_pool(plan, segment, frame, decoders, canvas)?;
                 }
             }
@@ -2471,15 +3089,65 @@ fn render_rgba_frame_with_pool(
             .iter()
             .filter(|overlay| overlay.start_frame <= frame && frame < overlay.end_frame)
         {
-            if let Some(image) = decoders.text_cache.get(plan, overlay) {
-                blend_buffer(canvas, image);
+            if let Some((width, height, image)) = decoders.text_cache.get(plan, overlay) {
+                blit_premultiplied(
+                    canvas,
+                    plan.width,
+                    plan.height,
+                    image,
+                    width,
+                    height,
+                    &overlay.raster_source_rect,
+                    &overlay.raster_dest_rect,
+                );
             } else {
-                let image =
-                    compose_text_overlay(plan, overlay, frame, decoders.artifacts.as_ref())?;
-                blend_buffer(canvas, &image);
-                decoders
-                    .text_cache
-                    .insert(TextRasterCacheKey::new(plan, overlay), image);
+                let (width, height, rgba) =
+                    load_text_overlay(overlay, decoders.artifacts.as_ref())?;
+                let cacheable = usize::try_from(width)
+                    .ok()
+                    .and_then(|width| {
+                        usize::try_from(height)
+                            .ok()
+                            .and_then(|height| width.checked_mul(height))
+                    })
+                    .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<PmPixel>()))
+                    .is_some_and(|bytes| bytes <= MAX_TEXT_RASTER_CACHE_BYTES);
+                if cacheable {
+                    let image = rgba
+                        .chunks_exact(4)
+                        .map(|pixel| {
+                            PmPixel::from_rgba(pixel[0], pixel[1], pixel[2], pixel[3], 10_000)
+                        })
+                        .collect::<Vec<_>>();
+                    blit_premultiplied(
+                        canvas,
+                        plan.width,
+                        plan.height,
+                        &image,
+                        width,
+                        height,
+                        &overlay.raster_source_rect,
+                        &overlay.raster_dest_rect,
+                    );
+                    decoders.text_cache.insert(
+                        TextRasterCacheKey::new(plan, overlay),
+                        width,
+                        height,
+                        image,
+                    );
+                } else {
+                    blit_source(
+                        canvas,
+                        plan.width,
+                        plan.height,
+                        &rgba,
+                        width,
+                        height,
+                        &overlay.raster_source_rect,
+                        &overlay.raster_dest_rect,
+                        10_000,
+                    );
+                }
             }
         }
     }
@@ -2488,11 +3156,30 @@ fn render_rgba_frame_with_pool(
         .checked_mul(4)
         .ok_or_else(|| AppError::invalid_argument("Render canvas is too large"))?;
     packed_rgba.resize(packed_len, 0);
-    for (index, pixel) in canvas.iter().enumerate() {
-        let offset = index * 4;
-        packed_rgba[offset..offset + 4].copy_from_slice(&pixel.to_straight_rgba());
+    for (chunk, pixel) in packed_rgba.chunks_exact_mut(4).zip(canvas.iter()) {
+        chunk.copy_from_slice(&pixel.to_straight_rgba());
     }
-    Ok(std::mem::take(packed_rgba))
+    Ok(())
+}
+
+fn decode_segment_source_into_pool(
+    segment: &RenderSegment,
+    frame: u64,
+    decoders: &mut PersistentDecoderPool,
+    output: &mut Vec<u8>,
+) -> Result<(), AppError> {
+    output.clear();
+    let Some(source_frame) = segment_source_frame(segment, frame)? else {
+        return Ok(());
+    };
+    let source = decoders.frame(
+        &segment.clip_id,
+        source_frame,
+        segment.source_width,
+        segment.source_height,
+    )?;
+    output.extend_from_slice(source);
+    Ok(())
 }
 
 fn render_segment_into_pool(
@@ -2502,17 +3189,9 @@ fn render_segment_into_pool(
     decoders: &mut PersistentDecoderPool,
     destination: &mut [PmPixel],
 ) -> Result<(), AppError> {
-    let source_frame = if segment.is_still_image {
-        segment.source_start_frame
-    } else {
-        segment
-            .source_start_frame
-            .checked_add(frame - segment.start_frame)
-            .ok_or_else(|| AppError::invalid_argument("Source frame mapping overflowed"))?
-    };
-    if source_frame < segment.active_start_frame || source_frame >= segment.active_end_frame {
+    let Some(source_frame) = segment_source_frame(segment, frame)? else {
         return Ok(());
-    }
+    };
     let source = decoders.frame(
         &segment.clip_id,
         source_frame,
@@ -2531,17 +3210,6 @@ fn render_segment_into_pool(
         segment.opacity,
     );
     Ok(())
-}
-
-fn compose_segment_with_pool(
-    plan: &RenderPlan,
-    segment: &RenderSegment,
-    frame: u64,
-    decoders: &mut PersistentDecoderPool,
-) -> Result<Vec<PmPixel>, AppError> {
-    let mut output = vec![PmPixel::transparent(); canvas_len(plan)?];
-    render_segment_into_pool(plan, segment, frame, decoders, &mut output)?;
-    Ok(output)
 }
 
 struct PersistentJpegEncoder {
@@ -2698,6 +3366,7 @@ fn read_jpeg(stdout: &mut impl Read) -> Result<Vec<u8>, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs as std_fs;
 
     #[test]
     fn clipped_scaled_and_cropped_sources_preserve_pixel_mapping() {
@@ -2968,5 +3637,318 @@ mod tests {
         );
         assert_eq!(software_preview_target_nanos(1, 30, 1).unwrap(), 33_333_333);
         assert_eq!(software_preview_target_nanos(1, 60, 1).unwrap(), 33_333_333);
+    }
+    #[test]
+    fn rendered_frame_cache_reuses_only_authoritative_artifacts() {
+        struct CacheArtifacts {
+            path: PathBuf,
+        }
+
+        impl ArtifactResolver for CacheArtifacts {
+            fn managed_path(&self, artifact_id: &str) -> Result<PathBuf, AppError> {
+                if artifact_id == "frame.png" {
+                    Ok(self.path.clone())
+                } else {
+                    Err(AppError::new(
+                        ErrorCode::AssetUnavailable,
+                        "Managed artifact is unavailable",
+                    ))
+                }
+            }
+
+            fn put_bytes(
+                &self,
+                _cache_key: &str,
+                _extension: &str,
+                _content_type: &str,
+                _bytes: &[u8],
+            ) -> Result<String, AppError> {
+                Ok("frame.png".to_owned())
+            }
+
+            fn bundled_font_catalog(
+                &self,
+            ) -> Result<Arc<crate::media::graphics::BundledFontCatalog>, AppError> {
+                panic!("font catalog is not needed by frame-cache tests")
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "cutterhoochee-frame-cache-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std_fs::create_dir_all(&root).unwrap();
+        let path = root.join("frame.png");
+        let rgba = vec![
+            32u8, 64, 96, 255, 8, 16, 24, 255, 3, 6, 9, 255, 200, 150, 100, 255,
+        ];
+        let png = encode_rgba_png(2, 2, &rgba).unwrap();
+        assert!(png.len() > 24);
+        std_fs::write(&path, &png).unwrap();
+        let artifacts = CacheArtifacts { path: path.clone() };
+        let key = RenderFrameCacheKey {
+            project_id: "project".to_owned(),
+            revision: 4,
+            plan_hash: "plan".to_owned(),
+            frame: 7,
+        };
+        let mut cache = RenderFrameArtifactCache::default();
+        let epoch = cache.epoch;
+        let artifact_len = png.len() as u64;
+        cache.insert_if_current(key.clone(), "frame.png".to_owned(), artifact_len, epoch);
+
+        let (candidate_epoch, candidate) = cache.candidate(&key);
+        assert_eq!(candidate_epoch, epoch);
+        let candidate = candidate.expect("cached frame");
+        assert_eq!(candidate.artifact_len, artifact_len);
+        assert!(validate_cached_frame_artifact(
+            &artifacts,
+            &candidate.artifact_id,
+            candidate.artifact_len,
+            2,
+            2
+        ));
+        assert!(cache.confirm_hit(&key, epoch, &candidate.artifact_id, candidate.artifact_len));
+
+        std_fs::write(&path, &png[..24]).unwrap();
+        assert!(!validate_cached_frame_artifact(
+            &artifacts,
+            &candidate.artifact_id,
+            candidate.artifact_len,
+            2,
+            2
+        ));
+        std_fs::remove_file(&path).unwrap();
+        assert!(!validate_cached_frame_artifact(
+            &artifacts,
+            &candidate.artifact_id,
+            candidate.artifact_len,
+            2,
+            2
+        ));
+        cache.evict_if_matches(&key, epoch, &candidate.artifact_id, candidate.artifact_len);
+        assert!(cache.candidate(&key).1.is_none());
+        std_fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rendered_frame_cache_invalidation_and_lru_eviction_are_bounded() {
+        let mut cache = RenderFrameArtifactCache::default();
+        let initial_epoch = cache.epoch;
+        let key = |frame| RenderFrameCacheKey {
+            project_id: "project".to_owned(),
+            revision: 1,
+            plan_hash: "plan".to_owned(),
+            frame,
+        };
+        for frame in 0..=MAX_RENDER_FRAME_CACHE_ENTRIES as u64 {
+            let frame_key = key(frame);
+            cache.insert_if_current(frame_key, format!("frame-{frame}.png"), 1, initial_epoch);
+        }
+        assert_eq!(cache.entries.len(), MAX_RENDER_FRAME_CACHE_ENTRIES);
+        assert!(cache.candidate(&key(0)).1.is_none());
+        let newest_artifact = format!("frame-{}.png", MAX_RENDER_FRAME_CACHE_ENTRIES);
+        let newest = cache
+            .candidate(&key(MAX_RENDER_FRAME_CACHE_ENTRIES as u64))
+            .1
+            .expect("newest cached frame");
+        assert_eq!(newest.artifact_id, newest_artifact);
+        let mut changed_plan = key(1);
+        changed_plan.plan_hash = "changed-plan".to_owned();
+        assert!(cache.candidate(&changed_plan).1.is_none());
+
+        cache.invalidate();
+        assert_ne!(cache.epoch, initial_epoch);
+        assert!(cache.entries.is_empty());
+        let stale_key = key(99);
+        cache.insert_if_current(stale_key.clone(), "stale.png".to_owned(), 1, initial_epoch);
+        assert!(cache.candidate(&stale_key).1.is_none());
+    }
+
+    #[test]
+    fn optimized_blit_and_transition_paths_match_canonical_composition() {
+        let source: Vec<u8> = (0u8..8)
+            .flat_map(|value| {
+                [
+                    value.wrapping_mul(17),
+                    255 - value * 7,
+                    value * 3,
+                    64 + value * 20,
+                ]
+            })
+            .collect();
+        let cases = [
+            (
+                SourceRect {
+                    x: 0,
+                    y: 0,
+                    width: 4,
+                    height: 2,
+                },
+                DestRect {
+                    x: -1,
+                    y: 1,
+                    width: 6,
+                    height: 3,
+                },
+                8_731,
+            ),
+            (
+                SourceRect {
+                    x: 1,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                },
+                DestRect {
+                    x: 2,
+                    y: -1,
+                    width: 5,
+                    height: 4,
+                },
+                10_000,
+            ),
+        ];
+        for (source_rect, dest_rect, opacity) in cases {
+            let mut canonical = vec![PmPixel::from_rgba(9, 11, 13, 255, 10_000); 20];
+            let mut optimized = canonical.clone();
+            let x0 = i64::from(dest_rect.x).max(0) as u32;
+            let y0 = i64::from(dest_rect.y).max(0) as u32;
+            let x1 = (i64::from(dest_rect.x) + i64::from(dest_rect.width))
+                .min(5)
+                .max(0) as u32;
+            let y1 = (i64::from(dest_rect.y) + i64::from(dest_rect.height))
+                .min(4)
+                .max(0) as u32;
+            let source_columns: Vec<usize> = (x0..x1)
+                .map(|x| {
+                    let rel_x = (i64::from(x) - i64::from(dest_rect.x)).max(0) as u64;
+                    (u64::from(source_rect.x)
+                        + rel_x.saturating_mul(u64::from(source_rect.width))
+                            / u64::from(dest_rect.width.max(1)))
+                    .min(u64::from(
+                        source_rect
+                            .x
+                            .saturating_add(source_rect.width)
+                            .saturating_sub(1),
+                    )) as usize
+                })
+                .collect();
+            for y in y0..y1 {
+                let rel_y = (i64::from(y) - i64::from(dest_rect.y)).max(0) as u64;
+                let sy = (u64::from(source_rect.y)
+                    + rel_y.saturating_mul(u64::from(source_rect.height))
+                        / u64::from(dest_rect.height.max(1)))
+                .min(u64::from(
+                    source_rect
+                        .y
+                        .saturating_add(source_rect.height)
+                        .saturating_sub(1),
+                ));
+                let source_row = sy as usize * 4;
+                let destination_row = y as usize * 5 + x0 as usize;
+                for (column, &sx) in source_columns.iter().enumerate() {
+                    let source_index = (source_row + sx) * 4;
+                    let pixel = PmPixel::from_rgba(
+                        source[source_index],
+                        source[source_index + 1],
+                        source[source_index + 2],
+                        source[source_index + 3],
+                        opacity,
+                    );
+                    let destination_index = destination_row + column;
+                    canonical[destination_index] = canonical[destination_index].over(pixel);
+                }
+            }
+            blit_source(
+                &mut optimized,
+                5,
+                4,
+                &source,
+                4,
+                2,
+                &source_rect,
+                &dest_rect,
+                opacity,
+            );
+            assert_eq!(optimized, canonical);
+        }
+
+        let left_source: Vec<u8> = (0u8..16)
+            .flat_map(|value| [value * 7, 20 + value * 3, 200 - value * 5, 100 + value * 4])
+            .collect();
+        let right_source: Vec<u8> = (0u8..16)
+            .flat_map(|value| [180 - value * 4, value * 5, 30 + value * 6, 60 + value * 8])
+            .collect();
+        let left_rect = SourceRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let right_rect = left_rect.clone();
+        let left_dest = DestRect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        let right_dest = DestRect {
+            x: 1,
+            y: 1,
+            width: 3,
+            height: 3,
+        };
+        let left = TransitionSource {
+            pixels: &left_source,
+            source_width: 4,
+            source_height: 4,
+            source_rect: &left_rect,
+            dest_rect: &left_dest,
+            opacity: 9_000,
+        };
+        let right = TransitionSource {
+            pixels: &right_source,
+            source_width: 4,
+            source_height: 4,
+            source_rect: &right_rect,
+            dest_rect: &right_dest,
+            opacity: 6_000,
+        };
+        let background = PmPixel::from_rgba(10, 20, 30, 255, 10_000);
+        let mut canonical = vec![background; 25];
+        let mut left_layer = vec![PmPixel::transparent(); 25];
+        let mut right_layer = vec![PmPixel::transparent(); 25];
+        blit_source(
+            &mut left_layer,
+            5,
+            5,
+            &left_source,
+            4,
+            4,
+            &left_rect,
+            &left_dest,
+            left.opacity,
+        );
+        blit_source(
+            &mut right_layer,
+            5,
+            5,
+            &right_source,
+            4,
+            4,
+            &right_rect,
+            &right_dest,
+            right.opacity,
+        );
+        for (destination, (left, right)) in canonical
+            .iter_mut()
+            .zip(left_layer.into_iter().zip(right_layer.into_iter()))
+        {
+            *destination = destination.over(PmPixel::weighted_pair(left, right, 2, 5));
+        }
+        let mut optimized = vec![background; 25];
+        blend_transition_sources(&mut optimized, 5, 5, Some(left), Some(right), 2, 5);
+        assert_eq!(optimized, canonical);
     }
 }

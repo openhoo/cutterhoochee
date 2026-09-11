@@ -1,9 +1,11 @@
-use crate::editor::operations::{apply_batch, EditOp};
+use crate::editor::operations::{apply_batch_in_place, EditOp};
 use crate::error::{AppError, ErrorCode};
 use crate::ipc::{EditorReply, EditorRequest, TimelineSelection};
 use crate::media::EvidenceAction;
 use crate::project::store::HistoryAction;
 use crate::state::AppState;
+use serde_json::Value;
+
 #[derive(Debug, Clone)]
 pub enum CallerKind {
     HumanWindow { label: String },
@@ -186,7 +188,7 @@ pub async fn dispatch(
                     move |document| {
                         let transcripts = operation_store
                             .load_transcripts_for_document(document, &operation_ids)?;
-                        apply_batch(document, &operation_list, &transcripts)
+                        apply_batch_in_place(document, &operation_list, &transcripts)
                     },
                 )?
             } else {
@@ -201,7 +203,7 @@ pub async fn dispatch(
                     move |document| {
                         let transcripts =
                             store.load_transcripts_for_document(document, &operation_ids)?;
-                        apply_batch(document, &operations, &transcripts)
+                        apply_batch_in_place(document, &operations, &transcripts)
                     },
                 )?
             };
@@ -448,14 +450,17 @@ fn human_caller(window: &tauri::Window, state: &AppState) -> CallerContext {
     )
 }
 
-/// Tauri's invoke handler accepts only the typed editor request. Caller
-/// identity and project/generation context are derived from the native window
-/// and current state, never from JSON supplied by the WebView.
+/// Tauri's invoke handler accepts the raw generated editor request envelope
+/// and validates it through the same strict `EditorRequest::from_wire` path
+/// used by the supervised sidecar before dispatch. Caller identity and
+/// project/generation context are still derived from the native window and
+/// current state, never from JSON supplied by the WebView.
 #[tauri::command]
 pub async fn editor_call(
     window: tauri::Window,
     state: tauri::State<'_, AppState>,
-    request: EditorRequest,
+    request: Value,
 ) -> Result<EditorReply, AppError> {
+    let request = EditorRequest::from_native_wire(&request)?;
     dispatch(request, human_caller(&window, &state), &state).await
 }

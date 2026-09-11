@@ -195,6 +195,11 @@ type AuthOperation = {
   authType: AuthType;
 };
 
+type AuthCompletion = {
+  promise: Promise<void>;
+  resolve: () => void;
+};
+
 type PendingPrompt = {
   resolve: (value: string) => void;
   reject: (error: unknown) => void;
@@ -206,6 +211,8 @@ export class ProvidersRuntime {
   private readonly pendingPrompts = new Map<string, PendingPrompt>();
   private selected?: SelectedModel;
   private activeAuth?: AuthOperation;
+  private activeAuthAbortController?: AbortController;
+  private activeAuthCompletion?: AuthCompletion;
 
   constructor(
     private readonly runtime: ModelRuntime,
@@ -323,23 +330,74 @@ export class ProvidersRuntime {
       throw new BridgeProtocolError("BUSY", "Another provider authentication is already in progress.");
     }
     const operation: AuthOperation = { authOperationId, providerId: id, authType: type };
+    const authController = new AbortController();
+    const onAbort = () => authController.abort(signal?.reason);
+    if (signal?.aborted) {
+      onAbort();
+    } else {
+      signal?.addEventListener("abort", onAbort, { once: true });
+    }
+    let resolveCompletion: () => void = () => undefined;
+    const completion: AuthCompletion = {
+      promise: new Promise<void>((resolve) => { resolveCompletion = resolve; }),
+      resolve: () => resolveCompletion(),
+    };
     this.activeAuth = operation;
+    this.activeAuthAbortController = authController;
+    this.activeAuthCompletion = completion;
     this.credentials.setRunId(operation.authOperationId);
+    // Authentication can complete before account-change handling resets the
+    // current session. Resolve cancellation waiters at that boundary, but
+    // retain activeAuth until the callback finishes so a replacement login
+    // cannot race the session reset.
+    const settle = () => {
+      signal?.removeEventListener("abort", onAbort);
+      if (this.activeAuth === operation) {
+        this.credentials.setRunId(undefined);
+        this.cancelPrompts(operation, new BridgeProtocolError("JOB_CANCELLED", "Authentication is no longer pending."));
+        this.activeAuthAbortController = undefined;
+      }
+      completion.resolve();
+    };
+    const clear = () => {
+      if (this.activeAuth === operation) {
+        this.activeAuth = undefined;
+        this.activeAuthCompletion = undefined;
+      }
+    };
     try {
-      const interaction = this.interaction(operation, signal);
+      const interaction = this.interaction(operation, authController.signal);
       await this.runtime.login(id, type, interaction);
-      const accountId = await this.credentials.accountId(id, { signal });
+      const accountId = await this.credentials.accountId(id, { signal: authController.signal });
       if (accountId === null) {
         throw new BridgeProtocolError("AUTH_REQUIRED", "The connected provider account identity is unavailable.");
       }
+      // Mark authentication complete before account-change handling. The
+      // callback resets the owning session and therefore calls stop(), which
+      // must not await this operation's own completion.
+      settle();
       await this.onAccountChanged(id);
       return { action: "login", providerId: id, type, configured: true };
     } finally {
-      this.credentials.setRunId(undefined);
-      this.cancelPrompts(operation, new BridgeProtocolError("JOB_CANCELLED", "Authentication is no longer pending."));
-      if (this.activeAuth?.authOperationId === operation.authOperationId) this.activeAuth = undefined;
+      settle();
+      clear();
     }
   }
+  /**
+   * Cancel an in-flight provider login without touching the credential store.
+   * The completion promise keeps callers from starting a replacement login
+   * while the provider and native lease cleanup are still unwinding.
+   */
+  async cancelActiveAuth(): Promise<void> {
+    const operation = this.activeAuth;
+    const completion = this.activeAuthCompletion;
+    if (operation === undefined || completion === undefined) return;
+    const cancellation = new BridgeProtocolError("JOB_CANCELLED", "Authentication was cancelled.");
+    this.cancelPrompts(operation, cancellation);
+    this.activeAuthAbortController?.abort(cancellation);
+    await completion.promise.catch(() => undefined);
+  }
+
   private async answer(promptId: string, value: string, authOperationId: string | undefined): Promise<ProvidersReply> {
     if (promptId.length === 0 || promptId.length > 256 || value.length > 16384) {
       throw new BridgeProtocolError("INVALID_ARGUMENT", "The authentication answer is invalid.");
@@ -367,8 +425,7 @@ export class ProvidersRuntime {
 
   private async logout(id: string, signal?: AbortSignal): Promise<ProvidersReply> {
     providerId(id);
-    this.cancelPrompts(undefined, new BridgeProtocolError("JOB_CANCELLED", "Authentication was cancelled by logout."));
-    if (this.activeAuth?.providerId === id) this.activeAuth = undefined;
+    if (this.activeAuth?.providerId === id) await this.cancelActiveAuth();
     await this.runtime.logout(id, { signal });
     if (this.selected?.providerId === id) this.selected = undefined;
     await this.onAccountChanged(id);
@@ -412,6 +469,8 @@ export class ProvidersRuntime {
     if (this.activeAuth !== operation) {
       return Promise.reject(new BridgeProtocolError("STALE_SESSION", "The authentication operation is no longer active."));
     }
+    const cancellation = new BridgeProtocolError("JOB_CANCELLED", "Authentication was cancelled.");
+    if (signal.aborted) return Promise.reject(cancellation);
     const promptId = crypto.randomUUID();
     const promptData = prompt.type === "select"
       ? { type: prompt.type, message: prompt.message, options: prompt.options }
@@ -428,9 +487,18 @@ export class ProvidersRuntime {
     return new Promise<string>((resolve, reject) => {
       const onAbort = () => {
         this.pendingPrompts.delete(promptId);
-        reject(new BridgeProtocolError("JOB_CANCELLED", "Authentication was cancelled."));
+        reject(cancellation);
       };
+      if (signal.aborted) {
+        reject(cancellation);
+        return;
+      }
       signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) {
+        signal.removeEventListener("abort", onAbort);
+        reject(cancellation);
+        return;
+      }
       this.pendingPrompts.set(promptId, {
         resolve: (value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
         reject: (error) => { signal.removeEventListener("abort", onAbort); reject(error); },

@@ -323,7 +323,7 @@ Range removal is destructive to the edit’s timing even though it is undoable. 
 
 Each track row has two icon buttons:
 
-- **Mute**/**Unmute** changes the stored track status. **Current limitation: the render plan does not use this status, so it must not be relied on to silence preview or exported audio.**
+- **Mute**/**Unmute** toggles whether that track contributes audio in preview and export. On a video track, muting silences the track's audio while its video remains visible.
 - **Lock**/**Unlock** prevents timing/content edits that would touch the track.
 
 Use **Lock** before inspecting a multi-track section to avoid moving it accidentally. A locked track is an editing constraint, not a permanent protection boundary: unlock it only when you intentionally need to edit it.
@@ -359,15 +359,15 @@ The corner label reports the project dimensions and either **Auto** or **Softwar
 
 Application audio is normalized to 48 kHz, stereo PCM and scheduled on the native project sample grid. Browser/device output may use a different hardware rate, but project sample coordinates remain 48 kHz. The timeline waveform is a bounded peak summary of normalized PCM; it is a visual aid, not an audio export substitute.
 
-The preview’s volume icon is an indicator, not a user volume slider. Change clip level using **Gain · dB** in **Inspector**. Clearing **Clip audio** excludes audio from a **video-track clip**. The current render plan ignores track **Mute** and does not exclude audio-track clips when their **Clip audio** checkbox is cleared. Do not use those ineffective states as a guarantee of silence. If unwanted audio must be excluded, remove its audio-track clip from a deliberately backed-up working copy and inspect the final export.
+The preview’s volume icon is an indicator, not a user volume slider. Change clip level using **Gain · dB** in **Inspector**. Clearing **Clip audio** excludes audio from the selected video- or audio-track clip. **Mute** excludes audio from the muted track in preview and export; muting a video track leaves its video visible. Use these controls to shape the mix, then inspect the final export.
 
 ### 7.4 Audio gaps and mixed tracks
 
 The render plan includes audio segments and intentional silence where no enabled clip contributes. Video-only assets can therefore play without an audio stream, while export still produces an audio stream for the final MP4. If audio is missing, check:
 
 1. The clip has normalized audio (an audio waveform can be generated).
-2. For a video-track clip, **Clip audio** is enabled if its sound is wanted.
-3. Do not use track **Mute** or an audio-track clip’s **Clip audio** checkbox to infer what the current renderer will play.
+2. **Clip audio** is enabled on the video- or audio-track clip when its sound is wanted.
+3. The containing track is not muted. Muting a video track removes only its audio; its video remains visible.
 4. **Gain · dB** is not set below the audible range.
 5. The playhead is inside the clip’s timeline interval.
 
@@ -376,6 +376,7 @@ The render plan includes audio segments and intentional silence where no enabled
 ### 8.1 Open the Inspector
 
 Select a media clip or text item, then choose the **Inspector** tab. With nothing selected, the panel says **Nothing selected** and instructs you to select a clip, title, or caption.
+Inspector groups follow the selected track type: **Canvas** and **Transitions** apply to video-track clips, while **Audio** applies to both video-track and audio-track clips.
 
 ![Inspector tab with a selected video clip and timing, canvas, audio, and transition fields.](assets/clip-inspector.png)
 
@@ -396,7 +397,7 @@ Values must be non-negative whole frames, and **Duration** must be positive. The
 
 ### 8.3 Canvas and visual properties
 
-The **Canvas** section provides:
+For a selected video-track clip, the **Canvas** section provides:
 
 - **Fit** — **Contain** or **Cover**.
  - **X · bp** and **Y · bp** — base-point positions from `0` to `10000`; `5000` is the centered coordinate.
@@ -407,9 +408,9 @@ The values are normalized project coordinates rather than CSS pixels. Use small 
 
 ### 8.4 Clip audio properties
 
-The **Audio** section provides:
+For a selected video-track or audio-track clip, the **Audio** section provides:
 
-- **Clip audio** checkbox. It excludes audio from video-track clips; it currently does not exclude audio-track clips from the render plan.
+- **Clip audio** checkbox. It excludes audio from both video-track and audio-track clips.
 - **Gain · dB**, bounded by the current native validation range (the control exposes a practical range of `-60` to `12` dB and accepts decimal steps).
 - **Fade in** and **Fade out** in whole frames.
 
@@ -434,7 +435,7 @@ Caption items are also editable text items, shown on the text track with a `CC` 
 
 ### 8.7 Dissolves
 
-A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:
+The **Transitions** section is available for video-track clips. A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:
 
 1. Select the left clip.
 2. Confirm that a next clip exists on the same video track and will follow it.
@@ -634,7 +635,7 @@ Before exporting:
 1. Save the project with **Ctrl/Cmd+S**.
 2. Review the current revision number in the top bar/status and inspect the complete timeline and preview.
 3. Confirm that all assets are normalized and no card says **Media preparation is incomplete.**
-4. Check captions, actual audio output, clip gain/fades, and transition overlaps. Do not rely on track **Mute** or an audio-track clip’s **Clip audio** state to silence output in the current build.
+4. Check captions, actual audio output, clip gain/fades, track mute state, and transition overlaps. **Mute** silences that track's audio in preview and export (video remains visible when its track is muted), and **Clip audio** controls audio on both video-track and audio-track clips.
 5. Click **Export** or press `Ctrl/Cmd+E`.
 
 The **Export video** dialog captures the selected current revision. Its message explicitly says the export will not change if you continue editing. Edits made after export starts do not mutate the captured render plan; they become a later project revision.
@@ -729,7 +730,7 @@ This workflow intentionally uses only controls that are visible and implemented.
 16. Select the matching video clip in the timeline and click **Apply captions**. Review each `CC` block in **Timeline**. Reapplying later will replace all captions owned by this clip, so finish any transcript-derived caption edits after the last application.
 17. Return to **Media** or use **Add title** at the current playhead. Select the title block, edit **Text**, and adjust **Style**, size, and positions in **Inspector**.
 18. Select the first clip, identify the next clip, and use **Transitions** → **Frames** → **Dissolve next** to add a short dissolve only if both clips are long enough. Preview the overlap.
-19. Use **Gain · dB**, **Fade in**, and **Fade out** to balance audio. **Clip audio** can exclude the video clip’s own sound. Do not rely on track **Mute** or an audio-track clip’s checkbox for silence; check audible output.
+19. Use **Gain · dB**, **Fade in**, and **Fade out** to balance audio. **Clip audio** can exclude audio from the selected video- or audio-track clip. **Mute** silences a track's audio in preview/export; muting a video track leaves its video visible.
 20. Save with `Ctrl/Cmd+S`. Wait for **Saved locally**.
 21. Click **Export**. Choose `1080p` for a full-size portrait deliverable, check **SRT caption sidecar** if a separate subtitle file is wanted, and start the export.
 22. Choose the MP4 destination. Review and answer its mandatory **Allow once** request and the separate SRT request if enabled; inspect existing-file overwrite details for each.
@@ -802,7 +803,7 @@ Software preview is a diagnostic/preview fallback, not a promise of hardware acc
 
 ### Preview plays video but no sound is audible
 
-Check video-clip **Clip audio**, **Gain · dB**, fades, and the playhead interval. Track **Mute/Unmute** is currently stored state only; an audio-track clip’s **Clip audio** checkbox also does not exclude its sound from the render plan. Neither is a reliable playback/export mute. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.
+Check the selected clip’s **Clip audio**, **Gain · dB**, fades, the containing track’s **Mute** state, and the playhead interval. **Clip audio** applies to both video-track and audio-track clips. **Mute/Unmute** silences or restores a track’s audio in preview and export; muting a video track leaves its video visible. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.
 
 ### Split says the playhead is outside the clip
 
@@ -925,7 +926,7 @@ Do not copy only `project.json`, only the `media` folder, or only the AppImage a
 - Pi can request editor and external operations, but AI output is not a substitute for revision review. External effects approved through permissions are not reversed by timeline Undo.
 - Preview **Software** mode is a bounded fallback for display; it is not an export-quality guarantee.
 - The current UI exposes same-track clip movement and insertion; do not assume arbitrary cross-track drag-and-drop, arbitrary track creation, or hidden project-profile conversion controls.
-- Track **Mute** is not consumed by the current render plan. **Clip audio** excludes video-track clip audio but does not exclude audio-track clips. These limitations can affect exported audio; do not mistake a stored muted/disabled state for guaranteed silence.
+- Track **Mute** silences that track’s audio in preview and export; muting a video track leaves its video visible. **Clip audio** disables audio on both video-track and audio-track clips.
 
 ### 16.2 Glossary
 
@@ -969,6 +970,6 @@ Do not copy only `project.json`, only the `media` folder, or only the AppImage a
 
 **Source in** — The first source frame used by a clip. Changing it changes which normalized source frames appear without necessarily changing the clip’s timeline start.
 
-**Track** — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; the current mute-state rendering limitation is described above.
+**Track** — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; **Mute** controls whether that track contributes audio to preview/export, while video remains visible when a video track is muted.
 
 **Workspace** — The app-owned authority scope that binds a project, managed artifacts, credentials/permissions, and native runtime state. Workspace authority is not copied into the portable project JSON.

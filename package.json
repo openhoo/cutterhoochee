@@ -21,7 +21,10 @@
     "prepare:sidecars": "node scripts/prepare-sidecars.mjs",
     "build": "node scripts/build-desktop.mjs",
     "bundle:linux": "node scripts/build-desktop.mjs --bundle-linux",
-    "test:unit": "pnpm --filter @cutterhoochee/app test:unit",
+    "test:unit": "pnpm --filter @cutterhoochee/app test:unit && pnpm --filter @cutterhoochee/agent test:unit",
+    "benchmark:editor": "cargo run --release --manifest-path src-tauri/Cargo.toml --example benchmark-editor --",
+    "benchmark:render": "cargo run --release --manifest-path src-tauri/Cargo.toml --example benchmark-render --",
+    "benchmark:native": "node scripts/benchmark-native.mjs",
     "version:check": "node scripts/release/sync-version.mjs --check",
     "version:sync": "node scripts/release/sync-version.mjs"
   },

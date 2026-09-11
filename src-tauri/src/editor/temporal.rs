@@ -102,17 +102,28 @@ fn ensure_shifted_caption_tracks_unlocked(
     video_track_id: &str,
     shift_start_frame: u64,
 ) -> Result<(), AppError> {
+    let clips: HashMap<_, _> = document
+        .clips
+        .iter()
+        .map(|clip| (clip.id.as_str(), clip))
+        .collect();
+    let tracks: HashMap<_, _> = document
+        .tracks
+        .iter()
+        .map(|track| (track.id.as_str(), track))
+        .collect();
     for text in &document.text_items {
         let Some(owner_clip_id) = text.owner_clip_id.as_deref() else {
             continue;
         };
-        let owner = document
-            .clips
-            .iter()
-            .find(|clip| clip.id == owner_clip_id)
+        let owner = clips
+            .get(owner_clip_id)
             .ok_or_else(|| invalid("Caption references an unknown owner clip"))?;
         if owner.track_id == video_track_id && owner.start_frame >= shift_start_frame {
-            if track_locked(document, &text.track_id)? {
+            let track = tracks
+                .get(text.track_id.as_str())
+                .ok_or_else(|| invalid(format!("Unknown track: {}", text.track_id)))?;
+            if track.locked {
                 return Err(invalid(
                     "Cannot shift clips whose captions belong to a locked text track",
                 ));
@@ -558,178 +569,228 @@ pub fn remove_range(
     }
     let mut used = entity_ids(document);
 
-    let mut segments_by_old: HashMap<String, Vec<ClipSegment>> = HashMap::new();
-    let mut all_segments = Vec::new();
-    for original in &document.clips {
-        let still_image = document
+    let (all_segments, text_items, transitions) = {
+        let assets: HashMap<_, _> = document
             .assets
             .iter()
-            .find(|asset| asset.id == original.asset_id)
-            .map(|asset| asset.kind == AssetKind::StillImage)
-            .ok_or_else(|| invalid("The clip asset does not exist"))?;
-        let segments = build_clip_segments(
-            original,
-            start_frame,
-            end_frame,
-            ripple,
-            still_image,
-            &mut used,
-        )?;
-        let changed = segments.len() != 1 || segments[0].clip != *original;
-        if changed && track_locked(document, &original.track_id)? {
-            return Err(invalid(format!(
-                "Cannot remove a range that changes locked track {}",
-                original.track_id
-            )));
-        }
-        segments_by_old.insert(original.id.clone(), segments.clone());
-        all_segments.extend(segments);
-    }
+            .map(|asset| (asset.id.as_str(), asset))
+            .collect();
+        let tracks: HashMap<_, _> = document
+            .tracks
+            .iter()
+            .map(|track| (track.id.as_str(), track))
+            .collect();
+        let original_clips: HashMap<_, _> = document
+            .clips
+            .iter()
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect();
 
-    let original_text_items = document.text_items.clone();
-    let mut text_items = Vec::with_capacity(original_text_items.len());
-    for text in original_text_items {
-        if let Some(owner_clip_id) = text.owner_clip_id.as_deref() {
-            let source_start = text
-                .source_start_frame
-                .ok_or_else(|| invalid("Owned caption source start is missing"))?;
-            let source_duration = text
-                .source_duration_frames
-                .ok_or_else(|| invalid("Owned caption source duration is missing"))?;
-            let source_end = checked_end(source_start, source_duration, "caption.sourceEndFrame")?;
-            let segments = segments_by_old
-                .get(owner_clip_id)
-                .ok_or_else(|| invalid("Caption references an unknown owner clip"))?;
-            let mut pieces = Vec::new();
-            for segment in segments {
-                let overlap_start = source_start.max(segment.caption_source_start_frame);
-                let overlap_end = source_end.min(segment.caption_source_end_frame);
-                if overlap_start >= overlap_end {
-                    continue;
+        let mut segments_by_old: HashMap<&str, (usize, usize)> = HashMap::new();
+        let mut all_segments = Vec::with_capacity(document.clips.len());
+        for original in &document.clips {
+            let still_image = assets
+                .get(original.asset_id.as_str())
+                .map(|asset| asset.kind == AssetKind::StillImage)
+                .ok_or_else(|| invalid("The clip asset does not exist"))?;
+            let segments = build_clip_segments(
+                original,
+                start_frame,
+                end_frame,
+                ripple,
+                still_image,
+                &mut used,
+            )?;
+            let changed = segments.len() != 1 || segments[0].clip != *original;
+            if changed {
+                let track = tracks
+                    .get(original.track_id.as_str())
+                    .ok_or_else(|| invalid(format!("Unknown track: {}", original.track_id)))?;
+                if track.locked {
+                    return Err(invalid(format!(
+                        "Cannot remove a range that changes locked track {}",
+                        original.track_id
+                    )));
                 }
-                pieces.push((segment, overlap_start, overlap_end));
             }
-            let locked = track_locked(document, &text.track_id)?;
-            if locked
-                && (pieces.len() != 1
-                    || pieces[0].1 != source_start
-                    || pieces[0].2 != source_end
-                    || pieces[0].0.clip.id != owner_clip_id
-                    || document
-                        .clips
-                        .iter()
-                        .find(|clip| clip.id == owner_clip_id)
-                        .is_some_and(|clip| pieces[0].0.clip.start_frame != clip.start_frame))
-            {
-                return Err(invalid(
-                    "Cannot remove a range that changes captions on a locked text track",
-                ));
-            }
-            for (index, (segment, piece_start, piece_end)) in pieces.into_iter().enumerate() {
-                let local_start = checked_sub(
-                    piece_start,
-                    segment.caption_source_start_frame,
-                    "caption.sourceStartFrame",
-                )?;
-                let local_end = checked_sub(
-                    piece_end,
-                    segment.caption_source_start_frame,
-                    "caption.sourceEndFrame",
-                )?;
-                let mapped_start = segment
-                    .source_start_frame
-                    .checked_add(local_start)
-                    .ok_or_else(|| invalid("Caption source start overflows"))?;
-                let mapped_end = segment
-                    .source_start_frame
-                    .checked_add(local_end)
-                    .ok_or_else(|| invalid("Caption source end overflows"))?;
-                validate_safe_integer(mapped_start, "caption.sourceStartFrame")?;
-                validate_safe_integer(mapped_end, "caption.sourceEndFrame")?;
-                let mut item = text.clone();
-                if index > 0 {
-                    item.id = fresh_id(&mut used);
-                }
-                item.owner_clip_id = Some(segment.clip.id.clone());
-                item.start_frame = None;
-                item.duration_frames = None;
-                item.source_start_frame = Some(mapped_start);
-                item.source_duration_frames = Some(mapped_end - mapped_start);
-                text_items.push(item);
-            }
-        } else {
-            let transformed = shifted_text_items(&text, start_frame, end_frame, ripple, &mut used)?;
-            if track_locked(document, &text.track_id)?
-                && (transformed.len() != 1 || transformed[0] != text)
-            {
-                return Err(invalid(
-                    "Cannot remove a range that changes text on a locked track",
-                ));
-            }
-            text_items.extend(transformed);
+            let start = all_segments.len();
+            all_segments.extend(segments);
+            let end = all_segments.len();
+            segments_by_old.insert(original.id.as_str(), (start, end));
         }
-    }
 
-    let original_clips: HashMap<_, _> = document
-        .clips
-        .iter()
-        .map(|clip| (clip.id.as_str(), clip))
-        .collect();
-    let mut transitions = Vec::with_capacity(document.transitions.len());
-    for transition in &document.transitions {
-        let (overlap_start, overlap_end) = transition_overlap(transition, &original_clips)?;
-        if start_frame < overlap_end && overlap_start < end_frame {
-            return Err(invalid(format!(
-                "Range [{start_frame}, {end_frame}) intersects dissolve overlap [{overlap_start}, {overlap_end}); remove transition {} first",
-                transition.id
-            )));
+        let original_text_items = document.text_items.clone();
+        let mut text_items = Vec::with_capacity(original_text_items.len());
+        for text in original_text_items {
+            if let Some(owner_clip_id) = text.owner_clip_id.as_deref() {
+                let source_start = text
+                    .source_start_frame
+                    .ok_or_else(|| invalid("Owned caption source start is missing"))?;
+                let source_duration = text
+                    .source_duration_frames
+                    .ok_or_else(|| invalid("Owned caption source duration is missing"))?;
+                let source_end =
+                    checked_end(source_start, source_duration, "caption.sourceEndFrame")?;
+                let (segments_start, segments_end) = segments_by_old
+                    .get(owner_clip_id)
+                    .copied()
+                    .ok_or_else(|| invalid("Caption references an unknown owner clip"))?;
+                let segments = &all_segments[segments_start..segments_end];
+                let mut pieces = Vec::with_capacity(segments.len());
+                for segment in segments {
+                    let overlap_start = source_start.max(segment.caption_source_start_frame);
+                    let overlap_end = source_end.min(segment.caption_source_end_frame);
+                    if overlap_start >= overlap_end {
+                        continue;
+                    }
+                    pieces.push((segment, overlap_start, overlap_end));
+                }
+                let track = tracks
+                    .get(text.track_id.as_str())
+                    .ok_or_else(|| invalid(format!("Unknown track: {}", text.track_id)))?;
+                let locked = track.locked;
+                let old_projection = if locked {
+                    let owner_clip = original_clips
+                        .get(owner_clip_id)
+                        .ok_or_else(|| invalid("Caption references an unknown owner clip"))?;
+                    // A ripple beginning at the owner can change its source
+                    // window while preserving start_frame; compare the actual
+                    // projection.
+                    Some(text.project_on_clip(owner_clip)?)
+                } else {
+                    None
+                };
+                let mut transformed = Vec::with_capacity(pieces.len());
+                let mut projection_changed = false;
+                for (index, (segment, piece_start, piece_end)) in pieces.into_iter().enumerate() {
+                    let local_start = checked_sub(
+                        piece_start,
+                        segment.caption_source_start_frame,
+                        "caption.sourceStartFrame",
+                    )?;
+                    let local_end = checked_sub(
+                        piece_end,
+                        segment.caption_source_start_frame,
+                        "caption.sourceEndFrame",
+                    )?;
+                    let mapped_start = segment
+                        .source_start_frame
+                        .checked_add(local_start)
+                        .ok_or_else(|| invalid("Caption source start overflows"))?;
+                    let mapped_end = segment
+                        .source_start_frame
+                        .checked_add(local_end)
+                        .ok_or_else(|| invalid("Caption source end overflows"))?;
+                    validate_safe_integer(mapped_start, "caption.sourceStartFrame")?;
+                    validate_safe_integer(mapped_end, "caption.sourceEndFrame")?;
+                    let mut item = text.clone();
+                    if index > 0 {
+                        item.id = fresh_id(&mut used);
+                    }
+                    item.owner_clip_id = Some(segment.clip.id.clone());
+                    item.start_frame = None;
+                    item.duration_frames = None;
+                    item.source_start_frame = Some(mapped_start);
+                    item.source_duration_frames = Some(mapped_end - mapped_start);
+                    if let Some(old_projection) = old_projection.as_ref() {
+                        let projection = item.project_on_clip(&segment.clip)?;
+                        if projection.as_ref() != old_projection.as_ref() {
+                            projection_changed = true;
+                        }
+                    }
+                    transformed.push(item);
+                }
+                if locked
+                    && (transformed.len() != 1 || transformed[0] != text || projection_changed)
+                {
+                    return Err(invalid(
+                        "Cannot remove a range that changes captions on a locked text track",
+                    ));
+                }
+                text_items.extend(transformed);
+            } else {
+                let transformed =
+                    shifted_text_items(&text, start_frame, end_frame, ripple, &mut used)?;
+                let track = tracks
+                    .get(text.track_id.as_str())
+                    .ok_or_else(|| invalid(format!("Unknown track: {}", text.track_id)))?;
+                if track.locked && (transformed.len() != 1 || transformed[0] != text) {
+                    return Err(invalid(
+                        "Cannot remove a range that changes text on a locked track",
+                    ));
+                }
+                text_items.extend(transformed);
+            }
         }
-        let left_segments = segments_by_old
-            .get(transition.left_clip_id.as_str())
-            .ok_or_else(|| {
-                invalid("Transition endpoint was removed; remove the transition explicitly first")
-            })?;
-        let right_segments = segments_by_old
-            .get(transition.right_clip_id.as_str())
-            .ok_or_else(|| {
-                invalid("Transition endpoint was removed; remove the transition explicitly first")
-            })?;
-        let left_sample = overlap_end
-            .checked_sub(1)
-            .ok_or_else(|| invalid("Transition overlap has no frames"))?;
-        let right_sample = map_kept_frame(overlap_start, start_frame, end_frame, ripple)
-            .ok_or_else(|| {
+
+        let mut transitions = Vec::with_capacity(document.transitions.len());
+        for transition in &document.transitions {
+            let (overlap_start, overlap_end) = transition_overlap(transition, &original_clips)?;
+            if start_frame < overlap_end && overlap_start < end_frame {
+                return Err(invalid(format!(
+                    "Range [{start_frame}, {end_frame}) intersects dissolve overlap [{overlap_start}, {overlap_end}); remove transition {} first",
+                    transition.id
+                )));
+            }
+            let (left_start, left_end) = segments_by_old
+                .get(transition.left_clip_id.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    invalid(
+                        "Transition endpoint was removed; remove the transition explicitly first",
+                    )
+                })?;
+            let (right_start, right_end) = segments_by_old
+                .get(transition.right_clip_id.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    invalid(
+                        "Transition endpoint was removed; remove the transition explicitly first",
+                    )
+                })?;
+            let left_segments = &all_segments[left_start..left_end];
+            let right_segments = &all_segments[right_start..right_end];
+            let left_sample = overlap_end
+                .checked_sub(1)
+                .ok_or_else(|| invalid("Transition overlap has no frames"))?;
+            let right_sample = map_kept_frame(overlap_start, start_frame, end_frame, ripple)
+                .ok_or_else(|| {
+                    invalid(
+                        "Range removes a transition endpoint; remove the transition explicitly first",
+                    )
+                })?;
+            let mapped_left_sample = map_kept_frame(left_sample, start_frame, end_frame, ripple)
+                .ok_or_else(|| {
+                    invalid(
+                        "Range removes a transition endpoint; remove the transition explicitly first",
+                    )
+                })?;
+            let left_segment = segment_for_frame(left_segments, left_sample).ok_or_else(|| {
                 invalid(
-                    "Range removes a transition endpoint; remove the transition explicitly first",
+                    "Range changes a transition endpoint; remove the transition explicitly first",
                 )
             })?;
-        let mapped_left_sample = map_kept_frame(left_sample, start_frame, end_frame, ripple)
-            .ok_or_else(|| {
-                invalid(
-                    "Range removes a transition endpoint; remove the transition explicitly first",
-                )
+            let right_segment = segment_for_frame(right_segments, overlap_start).ok_or_else(|| {
+                invalid("Range changes a transition endpoint; remove the transition explicitly first")
             })?;
-        let left_segment = segment_for_frame(left_segments, left_sample).ok_or_else(|| {
-            invalid("Range changes a transition endpoint; remove the transition explicitly first")
-        })?;
-        let right_segment = segment_for_frame(right_segments, overlap_start).ok_or_else(|| {
-            invalid("Range changes a transition endpoint; remove the transition explicitly first")
-        })?;
-        // Evaluate transformed coordinates against the retained output
-        // intervals; a missing endpoint means this range invalidates the
-        // dissolve and requires an explicit remove_transition first.
-        if !left_segment.clip.interval()?.contains(mapped_left_sample)
-            || !right_segment.clip.interval()?.contains(right_sample)
-        {
-            return Err(invalid(
-                "Range changes a transition endpoint; remove the transition explicitly first",
-            ));
+            // Evaluate transformed coordinates against the retained output
+            // intervals; a missing endpoint means this range invalidates the
+            // dissolve and requires an explicit remove_transition first.
+            if !left_segment.clip.interval()?.contains(mapped_left_sample)
+                || !right_segment.clip.interval()?.contains(right_sample)
+            {
+                return Err(invalid(
+                    "Range changes a transition endpoint; remove the transition explicitly first",
+                ));
+            }
+            let mut mapped = transition.clone();
+            mapped.left_clip_id = left_segment.clip.id.clone();
+            mapped.right_clip_id = right_segment.clip.id.clone();
+            transitions.push(mapped);
         }
-        let mut mapped = transition.clone();
-        mapped.left_clip_id = left_segment.clip.id.clone();
-        mapped.right_clip_id = right_segment.clip.id.clone();
-        transitions.push(mapped);
-    }
+        (all_segments, text_items, transitions)
+    };
+
     document.clips = all_segments
         .into_iter()
         .map(|segment| segment.clip)

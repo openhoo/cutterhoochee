@@ -440,7 +440,13 @@ export class PiRuntime {
       this.retireRunId(this.currentRunId);
     }
     this.currentRunId = undefined;
-    if (this.session !== undefined) await this.session.abort();
+    const results = await Promise.allSettled([
+      this.session?.abort() ?? Promise.resolve(),
+      this.providers.cancelActiveAuth(),
+    ]);
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
   }
 
   async newSession(): Promise<void> {

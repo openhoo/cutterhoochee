@@ -438,6 +438,64 @@ describe("PreviewEngine software playback", () => {
     }
   });
 });
+describe("PreviewEngine frame synchronization", () => {
+  it("suppresses completed duplicate-frame syncs but invalidates them for a new operation", async () => {
+    const harness = createPreviewRaceHarness();
+    try {
+      await harness.engine.setProject(makeProject());
+      const internals = harness.engine as unknown as {
+        operation: number;
+        videoPool: { sync: (mappings: unknown[], playing: boolean) => Promise<void> };
+        syncInputs: (frame: number, playing: boolean, token: number) => Promise<void>;
+      };
+      const sync = vi.spyOn(internals.videoPool, "sync");
+      const token = internals.operation;
+      await internals.syncInputs(0, true, token);
+      await internals.syncInputs(0, true, token);
+      expect(sync).toHaveBeenCalledTimes(1);
+
+      internals.operation += 1;
+      await internals.syncInputs(0, true, internals.operation);
+      expect(sync).toHaveBeenCalledTimes(2);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+describe("PreviewEngine animation ordering", () => {
+  it("syncs an audio-advanced frame when the RAF callback sees the same published frame", async () => {
+    const harness = createPreviewRaceHarness();
+    let raf: (() => void) | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      raf = callback as unknown as () => void;
+      return 1;
+    });
+    try {
+      await harness.engine.setProject(makeProject());
+      const internals = harness.engine as unknown as {
+        readonly operation: number;
+        readonly audioClock: { sample: number };
+        frame: number;
+        desiredPlaying: boolean;
+        syncInputs: (frame: number, playing: boolean, token: number) => Promise<void>;
+        startAnimation: () => void;
+      };
+      const token = internals.operation;
+      const sync = vi.spyOn(internals, "syncInputs");
+      await internals.syncInputs(0, true, token);
+      sync.mockClear();
+      internals.desiredPlaying = true;
+      internals.frame = 1;
+      Object.defineProperty(internals.audioClock, "sample", { configurable: true, value: 1_600 });
+      internals.startAnimation();
+      raf?.();
+      await settleMicrotasks();
+      expect(sync).toHaveBeenCalledWith(1, true, token);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
 describe("PreviewEngine software preparation invalidation", () => {
   it("does not present or acknowledge paused packets and retires them across seek/project invalidation", async () => {
     vi.useFakeTimers();

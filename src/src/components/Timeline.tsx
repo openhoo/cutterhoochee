@@ -1,16 +1,18 @@
 import type * as React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Lock, Magnet, Plus, Scissors, SlidersHorizontal, Volume2, VolumeX } from "lucide-react";
 
 import type { EditOp, EditorClient, MediaClip, ProjectSnapshot, TextItem, TimelineSelection, TimelineSnapshot, Track } from "@cutterhoochee/shared";
 import { callNative, formatDuration, formatTimecode, numberValue, record, replyPayload, stringValue, transitionRemovalOps } from "@/lib/native";
 import { Button } from "@/components/ui/button";
+import { PlaybackFrameStore, usePlaybackFrame } from "@/components/PlaybackFrameStore";
 
 export type TimelineProps = {
   client: EditorClient;
   snapshot: ProjectSnapshot;
   timeline: TimelineSnapshot | null;
   selection: TimelineSelection;
+  playheadStore?: PlaybackFrameStore;
   onSelectionChange: (selection: TimelineSelection) => Promise<void>;
   onEdit: (label: string, operations: readonly EditOp[]) => Promise<void>;
   onNotice: (notice: string) => void;
@@ -54,11 +56,12 @@ const RULER_MIN_SPACING_PX = 56;
 const TARGET_THUMBNAIL_WIDTH_PX = 64;
 const MAX_THUMBNAILS_PER_CLIP = 12;
 const MAX_THUMBNAILS_PER_ASSET = 96;
-const MAX_WAVEFORM_BARS = 128;
-const MAX_WAVEFORM_BYTES = 2 * 1024 * 1024;
 const MEDIA_REQUEST_CONCURRENCY = 3;
+const MAX_REQUESTED_MEDIA_KEYS = 4096;
+const MAX_WAVEFORM_BYTES = 2 * 1024 * 1024;
+const MAX_WAVEFORM_BARS = 512;
 
-export function Timeline({ client, snapshot, timeline, selection, onSelectionChange, onEdit, onNotice }: TimelineProps) {
+export const Timeline = memo(function Timeline({ client, snapshot, timeline, selection, playheadStore, onSelectionChange, onEdit, onNotice }: TimelineProps) {
   const [scale, setScale] = useState(DEFAULT_SCALE);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -72,7 +75,18 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
   const viewportRef = useRef<HTMLDivElement>(null);
   const didRulerDrag = useRef(false);
   const rulerDragStart = useRef<number | null>(null);
-  const requestedMediaKeysRef = useRef(new Set<string>());
+  const requestedMediaKeysRef = useRef(new Map<string, number>());
+  const requestedMediaClockRef = useRef(0);
+  const fallbackPlayheadStoreRef = useRef<PlaybackFrameStore | null>(null);
+  const fallbackPlayheadStore = fallbackPlayheadStoreRef.current ?? (fallbackPlayheadStoreRef.current = new PlaybackFrameStore(selection.playheadFrame));
+  const frameStore = playheadStore ?? fallbackPlayheadStore;
+  useEffect(() => {
+    if (!playheadStore) frameStore.set(selection.playheadFrame);
+  }, [frameStore, playheadStore, selection.playheadFrame]);
+  const selectionAtCurrentFrame = useCallback(() => {
+    const playheadFrame = frameStore.getSnapshot();
+    return playheadFrame === selection.playheadFrame ? selection : { ...selection, playheadFrame };
+  }, [frameStore, selection]);
 
   const tracks = snapshot.document.tracks;
   const duration = Math.max(timeline?.durationFrames ?? 0, 1);
@@ -81,6 +95,8 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
   const fpsDen = snapshot.document.profile.fpsDen;
   const fps = fpsNum > 0 && fpsDen > 0 ? fpsNum / fpsDen : 30;
   const selectedClipId = selection.clipIds[0];
+  const selectedClipIds = useMemo(() => new Set(selection.clipIds), [selection.clipIds]);
+  const selectedTextIds = useMemo(() => new Set(selection.textIds), [selection.textIds]);
   const clientContext = client.getContext();
   const previewScope = `${clientContext.generation}:${clientContext.projectId ?? ""}:${snapshot.workspaceId}:${snapshot.document.projectId}:${snapshot.document.revision}`;
   const previewScopeRef = useRef(previewScope);
@@ -132,6 +148,22 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
     }
     return entries;
   }, [clipByTrack, visibleFrameEnd, visibleFrameStart, visibleTracks]);
+  const visibleEntriesByTrack = useMemo(() => {
+    const clips = new Map<string, MediaClip[]>();
+    const textItems = new Map<string, VisibleText[]>();
+    for (const { clip, track } of visibleClipEntries) {
+      const entries = clips.get(track.id);
+      if (entries) entries.push(clip);
+      else clips.set(track.id, [clip]);
+    }
+    for (const track of visibleTracks) {
+      const entries = textByTrack.get(track.id) ?? [];
+      const visible = entries.filter((entry) => entry.startFrame < visibleFrameEnd && entry.startFrame + entry.durationFrames > visibleFrameStart);
+      if (visible.length > 0) textItems.set(track.id, visible);
+    }
+    return { clips, textItems };
+  }, [textByTrack, visibleClipEntries, visibleFrameEnd, visibleFrameStart, visibleTracks]);
+  const ticks = useMemo(() => rulerTicks(duration, fpsNum, fpsDen, scale), [duration, fpsDen, fpsNum, scale]);
 
   const thumbnailFramesByClip = useMemo(() => {
     const map = new Map<string, readonly number[]>();
@@ -181,11 +213,30 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  const claimMediaRequest = useCallback((requestKey: string): boolean => {
+    const requests = requestedMediaKeysRef.current;
+    if (requests.has(requestKey)) {
+      requests.set(requestKey, ++requestedMediaClockRef.current);
+      return false;
+    }
+    requests.set(requestKey, ++requestedMediaClockRef.current);
+    if (requests.size > MAX_REQUESTED_MEDIA_KEYS) {
+      let oldestKey: string | undefined;
+      let oldestAccess = Number.POSITIVE_INFINITY;
+      for (const [key, access] of requests) {
+        if (access < oldestAccess) {
+          oldestKey = key;
+          oldestAccess = access;
+        }
+      }
+      if (oldestKey !== undefined) requests.delete(oldestKey);
+    }
+    return true;
+  }, []);
 
   const loadThumbnail = useCallback(async (request: ThumbnailRequest, scope: string, isCurrent: () => boolean) => {
     const requestKey = `${scope}:${request.key}`;
-    if (requestedMediaKeysRef.current.has(requestKey)) return;
-    requestedMediaKeysRef.current.add(requestKey);
+    if (!claimMediaRequest(requestKey)) return;
     const stateKey = `${request.assetId}:thumbnail`;
     if (!isCurrent()) return;
     setPreviews((current) => {
@@ -225,12 +276,11 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
         return { ...current, [stateKey]: { ...previous, loading: false, error: error instanceof Error ? error.message : "Thumbnail unavailable" } };
       });
     }
-  }, [client]);
+  }, [claimMediaRequest, client]);
 
   const loadWaveform = useCallback(async (request: WaveformRequest, scope: string, isCurrent: () => boolean) => {
     const requestKey = `${scope}:${request.key}`;
-    if (requestedMediaKeysRef.current.has(requestKey)) return;
-    requestedMediaKeysRef.current.add(requestKey);
+    if (!claimMediaRequest(requestKey)) return;
     const stateKey = `${request.assetId}:waveform`;
     if (!isCurrent()) return;
     setPreviews((current) => {
@@ -266,10 +316,11 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
         return { ...current, [stateKey]: { ...previous, loading: false, error: error instanceof Error ? error.message : "Waveform unavailable" } };
       });
     }
-  }, [client]);
+  }, [claimMediaRequest, client]);
 
   useEffect(() => {
     requestedMediaKeysRef.current.clear();
+    requestedMediaClockRef.current = 0;
     setPreviews({});
   }, [previewScope]);
 
@@ -312,12 +363,12 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
     });
   }, [previewScope, snapshot.document.clips]);
 
-  const frameAtX = (clientX: number) => {
+  const frameAtX = useCallback((clientX: number) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return 0;
     return Math.max(0, Math.round((clientX - rect.left + scrollLeft - TIMELINE_LABEL_WIDTH) / scale));
-  };
-  const beginRulerSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+  }, [scale, scrollLeft]);
+  const beginRulerSelection = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     const startFrame = frameAtX(event.clientX);
     rulerDragStart.current = startFrame;
@@ -339,34 +390,49 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
       rulerDragStart.current = null;
       rangeGhostRef.current = null;
       setRangeGhost(null);
-      if (ghost && ghost.endFrame > ghost.startFrame) void onSelectionChange({ ...selection, playheadFrame: ghost.playheadFrame, range: { startFrame: ghost.startFrame, endFrame: ghost.endFrame } });
-      else void onSelectionChange({ ...selection, playheadFrame: startFrame, range: undefined });
+      const baseSelection = selectionAtCurrentFrame();
+      if (ghost && ghost.endFrame > ghost.startFrame) void onSelectionChange({ ...baseSelection, playheadFrame: ghost.playheadFrame, range: { startFrame: ghost.startFrame, endFrame: ghost.endFrame } });
+      else void onSelectionChange({ ...baseSelection, playheadFrame: startFrame, range: undefined });
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-  };
+  }, [frameAtX, onSelectionChange, selectionAtCurrentFrame]);
 
-  const snapFrame = (frame: number, clipId?: string) => {
+  const snapPoints = useMemo(
+    () => snapshot.document.clips.flatMap((clip) => [
+      { clipId: clip.id, frame: clip.startFrame },
+      { clipId: clip.id, frame: clip.startFrame + clip.durationFrames },
+    ]),
+    [snapshot.document.clips],
+  );
+  const snapFrame = useCallback((frame: number, clipId?: string) => {
     if (!snapEnabled) return Math.max(0, frame);
-    const candidates = [0, selection.playheadFrame, ...snapshot.document.clips.flatMap((clip) => clip.id === clipId ? [] : [clip.startFrame, clip.startFrame + clip.durationFrames])];
+    const currentPlayhead = frameStore.getSnapshot();
     const threshold = 6 / scale;
-    const nearest = candidates.reduce<{ frame: number; distance: number } | null>((best, candidate) => {
+    let nearest: { frame: number; distance: number } | undefined;
+    const consider = (candidate: number) => {
       const distance = Math.abs(candidate - frame);
-      return distance < threshold && (!best || distance < best.distance) ? { frame: candidate, distance } : best;
-    }, null);
+      if (distance < threshold && (!nearest || distance < nearest.distance)) nearest = { frame: candidate, distance };
+    };
+    consider(0);
+    consider(currentPlayhead);
+    for (const point of snapPoints) {
+      if (point.clipId !== clipId) consider(point.frame);
+    }
     return Math.max(0, nearest?.frame ?? frame);
-  };
+  }, [frameStore, scale, snapEnabled, snapPoints]);
 
-  const selectClip = async (clip: MediaClip, additive = false) => {
+  const selectClip = useCallback(async (clip: MediaClip, additive = false) => {
     const clipIds = additive ? selection.clipIds.includes(clip.id) ? selection.clipIds.filter((id) => id !== clip.id) : [...selection.clipIds, clip.id] : [clip.id];
-    await onSelectionChange({ ...selection, clipIds, textIds: [], playheadFrame: clip.startFrame });
-  };
-  const selectText = async (entry: VisibleText, additive = false) => {
+    await onSelectionChange({ ...selectionAtCurrentFrame(), clipIds, textIds: [], playheadFrame: clip.startFrame });
+  }, [onSelectionChange, selection, selectionAtCurrentFrame]);
+  const selectText = useCallback(async (entry: VisibleText, additive = false) => {
     const textIds = additive ? selection.textIds.includes(entry.item.id) ? selection.textIds.filter((id) => id !== entry.item.id) : [...selection.textIds, entry.item.id] : [entry.item.id];
-    await onSelectionChange({ ...selection, clipIds: [], textIds, playheadFrame: entry.startFrame });
-  };
+    await onSelectionChange({ ...selectionAtCurrentFrame(), clipIds: [], textIds, playheadFrame: entry.startFrame });
+  }, [onSelectionChange, selection, selectionAtCurrentFrame]);
+
 
   const toggleTrack = async (track: Track, field: "muted" | "locked") => {
     try {
@@ -396,7 +462,7 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
     await addAssetAt(assetId, frameAtX(event.clientX), track);
   };
 
-  const onClipPointerDown = (event: React.PointerEvent<HTMLDivElement>, clip: MediaClip) => {
+  const onClipPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, clip: MediaClip) => {
     if (event.button !== 0) return;
     event.stopPropagation();
     void selectClip(clip, event.shiftKey).catch(() => undefined);
@@ -419,10 +485,10 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-  };
+  }, [onEdit, scale, selectClip, snapFrame, snapshot]);
 
   const splitClip = async (clip: MediaClip) => {
-    const frame = selection.playheadFrame;
+    const frame = frameStore.getSnapshot();
     if (frame <= clip.startFrame || frame >= clip.startFrame + clip.durationFrames) {
       onNotice("Place the playhead inside the selected clip to split it.");
       return;
@@ -453,11 +519,12 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
     const nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, requestedScale));
     const viewport = viewportRef.current;
     const currentScrollLeft = viewport?.scrollLeft ?? scrollLeft;
-    const playheadViewportX = TIMELINE_LABEL_WIDTH + selection.playheadFrame * scale - currentScrollLeft;
+    const playheadFrame = frameStore.getSnapshot();
+    const playheadViewportX = TIMELINE_LABEL_WIDTH + playheadFrame * scale - currentScrollLeft;
     setScale(nextScale);
     requestAnimationFrame(() => {
       if (!viewportRef.current) return;
-      const nextScrollLeft = TIMELINE_LABEL_WIDTH + selection.playheadFrame * nextScale - playheadViewportX;
+      const nextScrollLeft = TIMELINE_LABEL_WIDTH + playheadFrame * nextScale - playheadViewportX;
       const maxScrollLeft = Math.max(0, viewportRef.current.scrollWidth - viewportRef.current.clientWidth);
       viewportRef.current.scrollLeft = Math.min(maxScrollLeft, Math.max(0, nextScrollLeft));
     });
@@ -470,58 +537,76 @@ export function Timeline({ client, snapshot, timeline, selection, onSelectionCha
       return;
     }
     try {
-      await onEdit("Add title", [{ op: "add_text", item: { id: crypto.randomUUID(), trackId: textTrack.id, kind: "title", text: "Your title", style: "clean", color: { red: 241, green: 240, blue: 235, alpha: 255 }, fontSize: 64, positionX: 5000, positionY: 1800, lineBreaks: [], startFrame: selection.playheadFrame, durationFrames: Math.max(1, Math.round(fps * 3)) } }]);
+      await onEdit("Add title", [{ op: "add_text", item: { id: crypto.randomUUID(), trackId: textTrack.id, kind: "title", text: "Your title", style: "clean", color: { red: 241, green: 240, blue: 235, alpha: 255 }, fontSize: 64, positionX: 5000, positionY: 1800, lineBreaks: [], startFrame: frameStore.getSnapshot(), durationFrames: Math.max(1, Math.round(fps * 3)) } }]);
     } catch {
       // Workspace reports the native error.
     }
   };
+  const onClipContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, clip: MediaClip) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextClip({ clip, x: event.clientX, y: event.clientY, scope: previewScope });
+  }, [previewScope]);
+  const onClipClick = useCallback((event: React.MouseEvent<HTMLDivElement>, clip: MediaClip) => {
+    event.stopPropagation();
+    void selectClip(clip, event.shiftKey).catch(() => undefined);
+  }, [selectClip]);
+  const onTextClick = useCallback((event: React.MouseEvent<HTMLButtonElement>, entry: VisibleText) => {
+    event.stopPropagation();
+    void selectText(entry, event.shiftKey).catch(() => undefined);
+  }, [selectText]);
 
   return <div className="timeline-shell" onClick={() => setContextClip(null)}>
     <div className="timeline-toolbar"><div className="timeline-title"><span className="eyebrow">Edit</span><strong>Timeline</strong><span className="timeline-duration">{formatDuration(duration, fpsNum, fpsDen)}</span></div><div className="timeline-controls"><Button variant="ghost" size="icon" aria-label="Split selected clip" disabled={!selectedClipId} onClick={() => { const clip = snapshot.document.clips.find((candidate) => candidate.id === selectedClipId); if (clip) void splitClip(clip); }}><Scissors aria-hidden="true" /></Button><Button variant="ghost" size="icon" aria-label="Add title" onClick={() => void addTitle()}><Plus aria-hidden="true" /></Button><button type="button" className={snapEnabled ? "snap-toggle active" : "snap-toggle"} onClick={() => setSnapEnabled((enabled) => !enabled)} aria-pressed={snapEnabled}><Magnet aria-hidden="true" />Snap</button><label className="zoom-control"><SlidersHorizontal aria-hidden="true" /><input type="range" min={MIN_SCALE} max={MAX_SCALE} step={SCALE_STEP} value={scale} onChange={(event) => changeZoom(Number(event.target.value))} aria-label="Timeline zoom" /></label></div></div>
-    <div className="timeline-scroll" ref={viewportRef} onScroll={(event) => { setScrollLeft(event.currentTarget.scrollLeft); setScrollTop(event.currentTarget.scrollTop); }} onClick={(event) => { if (event.target === event.currentTarget) void onSelectionChange({ ...selection, playheadFrame: frameAtX(event.clientX) }); }}>
+    <div className="timeline-scroll" ref={viewportRef} onScroll={(event) => { setScrollLeft(event.currentTarget.scrollLeft); setScrollTop(event.currentTarget.scrollTop); }} onClick={(event) => { if (event.target === event.currentTarget) void onSelectionChange({ ...selectionAtCurrentFrame(), playheadFrame: frameAtX(event.clientX) }); }}>
       <div className="timeline-canvas" style={{ width: contentWidth, height: Math.max(220, RULER_HEIGHT + tracks.length * TRACK_ROW_HEIGHT) }}>
-        <div className="timeline-ruler" style={{ width: contentWidth, left: 0 }} onPointerDown={beginRulerSelection} onClick={(event) => { if (didRulerDrag.current) { didRulerDrag.current = false; return; } void onSelectionChange({ ...selection, playheadFrame: frameAtX(event.clientX) }); }}>{rulerTicks(duration, fpsNum, fpsDen, scale).map((tick) => <span key={tick.frame} data-frame={tick.frame} style={{ left: TIMELINE_LABEL_WIDTH + tick.frame * scale }}>{tick.label}</span>)}</div>
+        <div className="timeline-ruler" style={{ width: contentWidth, left: 0 }} onPointerDown={beginRulerSelection} onClick={(event) => { if (didRulerDrag.current) { didRulerDrag.current = false; return; } void onSelectionChange({ ...selectionAtCurrentFrame(), playheadFrame: frameAtX(event.clientX) }); }}>{ticks.map((tick) => <span key={tick.frame} data-frame={tick.frame} style={{ left: TIMELINE_LABEL_WIDTH + tick.frame * scale }}>{tick.label}</span>)}</div>
         {rangeGhost ? <div className="timeline-range-selection" style={{ left: TIMELINE_LABEL_WIDTH + rangeGhost.startFrame * scale, width: Math.max(1, (rangeGhost.endFrame - rangeGhost.startFrame) * scale) }} /> : null}
-        <div className="timeline-playhead" style={{ left: TIMELINE_LABEL_WIDTH + selection.playheadFrame * scale }} aria-label={`Playhead at ${formatTimecode(selection.playheadFrame, fpsNum, fpsDen)}`} />
+        <TimelinePlayhead frameStore={frameStore} scale={scale} fpsNum={fpsNum} fpsDen={fpsDen} />
         {visibleTracks.map((track, visibleIndex) => {
           const trackIndex = visibleTop + visibleIndex;
           const clips = clipByTrack.get(track.id) ?? [];
-          const visibleClips = clips.filter((clip) => clip.startFrame < visibleFrameEnd && clip.startFrame + clip.durationFrames > visibleFrameStart);
+          const visibleClips = visibleEntriesByTrack.clips.get(track.id) ?? [];
           const textItems = textByTrack.get(track.id) ?? [];
-          const visibleTextItems = textItems.filter((entry) => entry.startFrame < visibleFrameEnd && entry.startFrame + entry.durationFrames > visibleFrameStart);
+          const visibleTextItems = visibleEntriesByTrack.textItems.get(track.id) ?? [];
           return <div className="track-row" key={track.id} style={{ top: RULER_HEIGHT + trackIndex * TRACK_ROW_HEIGHT }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => void onDrop(event, track)}><div className="track-label"><div className="track-label-name"><span className={`track-kind-dot ${track.kind}`} />{track.name}</div><div className="track-actions"><button type="button" className="track-icon" aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`} onClick={() => void toggleTrack(track, "muted")}>{track.muted ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}</button><button type="button" className="track-icon" aria-label={track.locked ? `Unlock ${track.name}` : `Lock ${track.name}`} onClick={() => void toggleTrack(track, "locked")}>{track.locked ? <Lock aria-hidden="true" /> : <UnlockIcon />}</button></div></div><div className="track-lane">{visibleClips.map((clip) => {
             const asset = assetById.get(clip.assetId);
             const videoSourceArtifactId = asset?.normalization?.video?.masterArtifactId;
             const audioSourceArtifactId = asset?.normalization?.audio?.pcmArtifactId;
             const thumbnailPreview = previewFor(previews[`${clip.assetId}:thumbnail`], previewScope, videoSourceArtifactId);
             const waveformPreview = previewFor(previews[`${clip.assetId}:waveform`], previewScope, audioSourceArtifactId);
-            return <TimelineClip key={clip.id} clip={clip} displayLabel={asset?.original.fileName ?? "Offline media"} selected={selection.clipIds.includes(clip.id)} ghostFrame={drag?.clipId === clip.id ? drag.ghostFrame : undefined} scale={scale} thumbnailFrames={thumbnailFramesByClip.get(clip.id) ?? []} thumbnailPreview={thumbnailPreview} waveform={waveformPreview?.waveform} waveformLoading={waveformPreview?.loading} waveformError={waveformPreview?.error} showWaveform={track.kind !== "text" && Boolean(audioSourceArtifactId)} fpsNum={fpsNum} fpsDen={fpsDen} onPointerDown={onClipPointerDown} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setContextClip({ clip, x: event.clientX, y: event.clientY, scope: previewScope }); }} onClick={(event) => { event.stopPropagation(); void selectClip(clip, event.shiftKey); }} />;
+            return <TimelineClip key={clip.id} clip={clip} displayLabel={asset?.original.fileName ?? "Offline media"} selected={selectedClipIds.has(clip.id)} ghostFrame={drag?.clipId === clip.id ? drag.ghostFrame : undefined} scale={scale} thumbnailFrames={thumbnailFramesByClip.get(clip.id) ?? []} thumbnailPreview={thumbnailPreview} waveform={waveformPreview?.waveform} waveformLoading={waveformPreview?.loading} waveformError={waveformPreview?.error} showWaveform={track.kind !== "text" && Boolean(audioSourceArtifactId)} fpsNum={fpsNum} fpsDen={fpsDen} onPointerDown={onClipPointerDown} onContextMenu={onClipContextMenu} onClick={onClipClick} />;
           })}
-          {visibleTextItems.map((entry) => <TimelineTextItem key={entry.item.id} entry={entry} selected={selection.textIds.includes(entry.item.id)} scale={scale} onClick={(event) => { event.stopPropagation(); void selectText(entry, event.shiftKey).catch(() => undefined); }} />)}
+          {visibleTextItems.map((entry) => <TimelineTextItem key={entry.item.id} entry={entry} selected={selectedTextIds.has(entry.item.id)} scale={scale} onClick={onTextClick} />)}
           {clips.length === 0 && textItems.length === 0 ? <span className="track-empty">Drop {track.kind === "text" ? "titles or captions" : "media"} here</span> : null}</div></div>;
         })}
       </div>
     </div>
     {contextClip ? <div className="timeline-context" style={{ left: contextClip.x, top: contextClip.y }} onClick={(event) => event.stopPropagation()}><button type="button" onClick={() => void splitClip(contextClip.clip).catch(() => undefined)}><Scissors aria-hidden="true" />Split at playhead</button><button type="button" onClick={() => void deleteClip(contextClip.clip).catch(() => undefined)}><TrashIcon />Remove clip</button>{snapshot.document.transitions.filter((transition) => transition.leftClipId === contextClip.clip.id || transition.rightClipId === contextClip.clip.id).map((transition) => <button type="button" key={transition.id} onClick={() => { setContextClip(null); void onEdit("Remove dissolve", [{ op: "remove_transition", transitionId: transition.id }]).catch(() => undefined); }}><XIcon />Remove dissolve</button>)}</div> : null}
   </div>;
-}
+});
+
+const TimelinePlayhead = memo(function TimelinePlayhead({ frameStore, scale, fpsNum, fpsDen }: { frameStore: PlaybackFrameStore; scale: number; fpsNum: number; fpsDen: number }) {
+  const frame = usePlaybackFrame(frameStore);
+  return <div className="timeline-playhead" style={{ left: TIMELINE_LABEL_WIDTH + frame * scale }} aria-label={`Playhead at ${formatTimecode(frame, fpsNum, fpsDen)}`} />;
+});
 
 type TimelineTextItemProps = {
   entry: VisibleText;
   selected: boolean;
   scale: number;
-  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>, entry: VisibleText) => void;
 };
 
-function TimelineTextItem({ entry, selected, scale, onClick }: TimelineTextItemProps) {
+const TimelineTextItem = memo(function TimelineTextItem({ entry, selected, scale, onClick }: TimelineTextItemProps) {
   const { item, startFrame, durationFrames, sourceStartFrame } = entry;
   const left = startFrame * scale;
   const width = Math.max(28, durationFrames * scale);
   const label = item.kind === "caption" ? "Caption" : "Title";
-  return <button type="button" className={selected ? "timeline-text-item selected" : "timeline-text-item"} style={{ left, width }} data-text-id={item.id} data-start-frame={startFrame} data-duration-frames={durationFrames} data-source-start-frame={sourceStartFrame} aria-label={`${label}: ${item.text}`} title={`${item.id} · timeline ${startFrame}–${startFrame + durationFrames}${sourceStartFrame === undefined ? "" : ` · source ${sourceStartFrame}–${sourceStartFrame + durationFrames}`} `} onPointerDown={(event) => event.stopPropagation()} onClick={onClick}>
+  return <button type="button" className={selected ? "timeline-text-item selected" : "timeline-text-item"} style={{ left, width }} data-text-id={item.id} data-start-frame={startFrame} data-duration-frames={durationFrames} data-source-start-frame={sourceStartFrame} aria-label={`${label}: ${item.text}`} title={`${item.id} · timeline ${startFrame}–${startFrame + durationFrames}${sourceStartFrame === undefined ? "" : ` · source ${sourceStartFrame}–${sourceStartFrame + durationFrames}`} `} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => onClick(event, entry)}>
     <span className="timeline-text-kind">{item.kind === "caption" ? "CC" : "T"}</span><span className="timeline-text-label">{item.text}</span><span className="timeline-text-duration">{durationFrames}f</span>
   </button>;
-}
+});
 
 type TimelineClipProps = {
   clip: MediaClip;
@@ -539,10 +624,10 @@ type TimelineClipProps = {
   fpsDen: number;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, clip: MediaClip) => void;
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>, clip: MediaClip) => void;
-  onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onClick: (event: React.MouseEvent<HTMLDivElement>, clip: MediaClip) => void;
 };
 
-function TimelineClip({ clip, displayLabel, selected, ghostFrame, scale, thumbnailFrames, thumbnailPreview, waveform, waveformLoading, waveformError, showWaveform, fpsNum, fpsDen, onPointerDown, onContextMenu, onClick }: TimelineClipProps) {
+const TimelineClip = memo(function TimelineClip({ clip, displayLabel, selected, ghostFrame, scale, thumbnailFrames, thumbnailPreview, waveform, waveformLoading, waveformError, showWaveform, fpsNum, fpsDen, onPointerDown, onContextMenu, onClick }: TimelineClipProps) {
   const left = (ghostFrame ?? clip.startFrame) * scale;
   const width = Math.max(28, clip.durationFrames * scale);
   const thumbnailImages: ThumbnailFrame[] = [];
@@ -558,14 +643,17 @@ function TimelineClip({ clip, displayLabel, selected, ghostFrame, scale, thumbna
       : thumbnailPreview?.error
         ? "Thumbnail unavailable"
         : "No thumbnail";
-  const waveformPeaks = showWaveform && waveform ? waveformPeaksForClip(waveform, clip, fpsNum, fpsDen, Math.min(MAX_WAVEFORM_BARS, Math.max(1, Math.floor(width / 2)))) : [];
-  return <div className={selected ? "timeline-clip selected" : "timeline-clip"} style={{ left, width, opacity: ghostFrame === undefined ? 1 : 0.62 }} data-start-frame={clip.startFrame} data-source-in-frame={clip.inFrame} onPointerDown={(event) => onPointerDown(event, clip)} onContextMenu={(event) => onContextMenu(event, clip)} onClick={onClick} title={`${clip.id} · timeline ${clip.startFrame}–${clip.startFrame + clip.durationFrames} · source ${clip.inFrame}–${clip.inFrame + clip.durationFrames}`}>
+  const waveformBarCount = Math.min(MAX_WAVEFORM_BARS, Math.max(1, Math.floor(width / 2)));
+  const waveformPeaks = useMemo(
+    () => showWaveform && waveform ? waveformPeaksForClip(waveform, clip, fpsNum, fpsDen, waveformBarCount) : [],
+    [clip, fpsDen, fpsNum, showWaveform, waveform, waveformBarCount],
+  );
+  return <div className={selected ? "timeline-clip selected" : "timeline-clip"} style={{ left, width, opacity: ghostFrame === undefined ? 1 : 0.62 }} data-start-frame={clip.startFrame} data-source-in-frame={clip.inFrame} onPointerDown={(event) => onPointerDown(event, clip)} onContextMenu={(event) => onContextMenu(event, clip)} onClick={(event) => onClick(event, clip)} title={`${clip.id} · timeline ${clip.startFrame}–${clip.startFrame + clip.durationFrames} · source ${clip.inFrame}–${clip.inFrame + clip.durationFrames}`}>
     {hasThumbnailSurface ? <div className="clip-preview-strip" aria-hidden="true">{thumbnailImages.map((image) => <img className="clip-preview-cell" key={`${image.artifactId}:${image.frame}`} src={image.url} alt="" draggable={false} data-source-frame={image.frame} />)}{thumbnailStatus ? <span className="clip-media-status">{thumbnailStatus}</span> : null}{thumbnailImages.length > 0 ? <span className="artifact-badge">native</span> : null}</div> : null}
     <div className="clip-info"><strong>{displayLabel}</strong><span>{clip.durationFrames}f</span></div>
     {showWaveform && waveformPeaks.length > 0 ? <div className="clip-waveform" aria-label="Audio waveform">{waveformPeaks.map((peak, index) => <span className="clip-waveform-bar" key={`${clip.id}:peak:${index}`} style={{ height: `${Math.round(peak * 100)}%` }} />)}</div> : null}{showWaveform && waveformPeaks.length === 0 && (waveformLoading || waveformError) ? <span className="clip-media-status">{waveformLoading ? "Preparing waveform…" : "Waveform unavailable"}</span> : null}
   </div>;
-}
-
+});
 function projectTextRange(item: TextItem, clipById: ReadonlyMap<string, MediaClip>): { startFrame: number; durationFrames: number; sourceStartFrame?: number } | undefined {
   const validFrame = (value: number | undefined): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
   if (item.ownerClipId !== undefined) {

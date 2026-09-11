@@ -67,6 +67,13 @@ interface SoftwareStreamIdentity {
   readonly planHash: string;
   readonly frame: number;
 }
+interface SyncedInputs {
+  readonly token: number;
+  readonly frame: number;
+  readonly playing: boolean;
+  readonly quality: PreviewQuality;
+  readonly planHash: string;
+}
 
 interface SoftwareFrameWait {
   readonly token: number;
@@ -280,6 +287,10 @@ export class PreviewEngine {
   private stillTimer: ReturnType<typeof setTimeout> | undefined;
   private stillRequest = 0;
   private movingUpdate: Promise<void> | undefined;
+  private lastSyncedInputs: SyncedInputs | undefined;
+  private activeSegmentCache: { plan: RenderPlan; frame: number; segments: RenderSegment[] } | undefined;
+  private activeRasterCache: { plan: RenderPlan; frame: number; overlays: RenderTextOverlay[] } | undefined;
+  private prewarmedNextFrame: { token: number; frame: number; planHash: string } | undefined;
   private softwareUnsubscribe: (() => void) | undefined;
   private softwareSubscriptionPromise: Promise<(() => void) | undefined> | undefined;
   private softwareStreamIdentity: SoftwareStreamIdentity | undefined;
@@ -675,16 +686,20 @@ export class PreviewEngine {
   private async syncInputs(frame: number, playing: boolean, token: number): Promise<void> {
     const plan = this.plan;
     if (!plan || !this.isCurrent(token)) return;
-    const useBrowserVideo = this.effectiveQuality() === "auto";
+    const quality = this.effectiveQuality();
+    const previous = this.lastSyncedInputs;
+    if (previous && previous.token === token && previous.frame === frame && previous.playing === playing && previous.quality === quality && previous.planHash === plan.planHash) return;
+    const useBrowserVideo = quality === "auto";
+    const activeSegments = this.activeSegments(plan, frame);
     if (useBrowserVideo) {
-      const mappings = await this.videoMappings(plan, frame, token);
+      const mappings = await this.videoMappings(plan, frame, token, activeSegments);
       if (!this.isCurrent(token)) throw staleError();
       await this.videoPool.sync(mappings, playing);
     } else {
       this.videoPool.pause();
     }
     const rasters = this.activeRasters(plan, frame);
-    const stillSegments = this.activeSegments(plan, frame).filter((segment) => segment.isStillImage);
+    const stillSegments = activeSegments.filter((segment) => segment.isStillImage);
     await Promise.all([
       ...rasters.map(async (overlay) => {
         await this.loadImageArtifact(overlay.rasterArtifactId, token);
@@ -693,16 +708,23 @@ export class PreviewEngine {
         await this.loadImageArtifact(segment.artifactId, token);
       }),
     ]);
-    if (!this.isCurrent(token)) throw staleError();
+    if (!this.isCurrent(token) || this.effectiveQuality() !== quality) throw staleError();
     const nextFrame = clampFrame(frame + 1, plan.durationFrames);
-    if (useBrowserVideo && nextFrame !== frame) {
-      void this.videoMappings(plan, nextFrame, token).then((nextMappings) => this.videoPool.prewarm(nextMappings)).catch(() => undefined);
+    const prewarm = this.prewarmedNextFrame;
+    if (useBrowserVideo && nextFrame !== frame && (!prewarm || prewarm.token !== token || prewarm.frame !== nextFrame || prewarm.planHash !== plan.planHash)) {
+      this.prewarmedNextFrame = { token, frame: nextFrame, planHash: plan.planHash };
+      void this.videoMappings(plan, nextFrame, token)
+        .then((nextMappings) => this.videoPool.prewarm(nextMappings))
+        .catch(() => {
+          if (this.prewarmedNextFrame?.token === token && this.prewarmedNextFrame.frame === nextFrame && this.prewarmedNextFrame.planHash === plan.planHash) this.prewarmedNextFrame = undefined;
+        });
     }
     if (!(playing && this.effectiveQuality() === "software")) this.drawApproximate();
+    this.lastSyncedInputs = { token, frame, playing, quality: this.effectiveQuality(), planHash: plan.planHash };
   }
 
-  private async videoMappings(plan: RenderPlan, frame: number, token: number): Promise<VideoMapping[]> {
-    const segments = this.activeSegments(plan, frame).filter((segment) => !segment.isStillImage);
+  private async videoMappings(plan: RenderPlan, frame: number, token: number, activeSegments = this.activeSegments(plan, frame)): Promise<VideoMapping[]> {
+    const segments = activeSegments.filter((segment) => !segment.isStillImage);
     const mappings = await Promise.all(segments.map(async (segment) => ({
       key: segment.clipId,
       src: await this.resolveArtifactUrl(segment.artifactId, undefined),
@@ -715,6 +737,8 @@ export class PreviewEngine {
   }
 
   private activeSegments(plan: RenderPlan, frame: number): RenderSegment[] {
+    const cached = this.activeSegmentCache;
+    if (cached && cached.plan === plan && cached.frame === frame) return cached.segments;
     const segments: RenderSegment[] = [];
     for (const layer of plan.layers) {
       if (layer.kind !== "video") continue;
@@ -723,18 +747,23 @@ export class PreviewEngine {
         if (active && (segment.isStillImage || (frame >= segment.activeStartFrame && frame < segment.activeEndFrame))) segments.push(segment);
       }
     }
+    this.activeSegmentCache = { plan, frame, segments };
     return segments;
   }
 
   private activeRasters(plan: RenderPlan, frame: number): RenderTextOverlay[] {
+    const cached = this.activeRasterCache;
+    if (cached && cached.plan === plan && cached.frame === frame) return cached.overlays;
     const overlays: RenderTextOverlay[] = [];
     for (const layer of plan.layers) {
       for (const overlay of layer.textOverlays) {
         if (frame >= overlay.startFrame && frame < overlay.endFrame) overlays.push(overlay);
       }
     }
+    this.activeRasterCache = { plan, frame, overlays };
     return overlays;
   }
+
   private drawApproximate(): void {
     if (!this.plan || this.disposed) return;
     const rasters = new Map<string, RasterSource>();
@@ -816,9 +845,16 @@ export class PreviewEngine {
       this.animationHandle = undefined;
       if (this.disposed || !this.desiredPlaying || !this.plan || this.plan.durationFrames === 0) return;
       const next = frameAtSample(this.audioClock.sample, this.plan.fpsNum, this.plan.fpsDen, this.plan.durationFrames);
+      const synced = this.lastSyncedInputs;
+      const frameChanged = !synced
+        || synced.token !== this.operation
+        || synced.frame !== next
+        || synced.playing !== true
+        || synced.quality !== this.effectiveQuality()
+        || synced.planHash !== this.plan.planHash;
       this.frame = next;
       if (this.effectiveQuality() === "software") this.pumpSoftware();
-      else void this.updateMovingFrame(this.operation, next);
+      else if (frameChanged) void this.updateMovingFrame(this.operation, next);
       this.animationHandle = requestAnimationFrame(tick);
     };
     this.animationHandle = requestAnimationFrame(tick);

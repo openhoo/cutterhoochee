@@ -139,6 +139,35 @@ impl EditorRequest {
             .unwrap_or_else(|| Value::Object(Map::new()))
     }
 
+    /// Parse the exact tagged request object supplied by the Tauri WebView.
+    ///
+    /// Tauri command arguments are otherwise deserialized directly into
+    /// `EditorRequest`, whose generated serde shape intentionally remains
+    /// permissive for compatibility. Keep this boundary raw so untrusted
+    /// fields reach the same strict `from_wire` validation used by the
+    /// supervised sidecar before dispatch can perform any effect.
+    pub(crate) fn from_native_wire(value: &Value) -> Result<Self, AppError> {
+        let fields = value
+            .as_object()
+            .ok_or_else(|| AppError::invalid_argument("Editor request must be an object"))?;
+        if let Some(field) = fields
+            .keys()
+            .find(|field| !matches!(field.as_str(), "method" | "params"))
+        {
+            return Err(AppError::invalid_argument(format!(
+                "Editor request has an unknown field {field}"
+            )));
+        }
+        let method = fields
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::invalid_argument("Editor request method is required"))?;
+        let params = fields
+            .get("params")
+            .ok_or_else(|| AppError::invalid_argument("Editor request params are required"))?;
+        Self::from_wire(method, params)
+    }
+
     pub fn from_wire(method: &str, params: &Value) -> Result<Self, AppError> {
         if !params.is_object() {
             return Err(AppError::invalid_argument(
@@ -731,3 +760,104 @@ pub fn validate_envelope(envelope: &BridgeEnvelope) -> Result<(), AppError> {
 
 #[allow(dead_code)]
 fn _keep_error_code_exported(_: ErrorCode) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn native_wire_rejects_unknown_lifecycle_fields() {
+        let nested_unknown = json!({
+            "method": "project_open",
+            "params": { "path": "/tmp/ungranted.cutproj" }
+        });
+        let error = EditorRequest::from_native_wire(&nested_unknown)
+            .expect_err("project_open must not accept a caller-supplied path");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+
+        let missing = json!({
+            "method": "project_create",
+            "params": {}
+        });
+        let error = EditorRequest::from_native_wire(&missing)
+            .expect_err("required project_create fields must not be defaulted");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+
+        let missing_params = json!({ "method": "project_status" });
+        let error = EditorRequest::from_native_wire(&missing_params)
+            .expect_err("the native envelope must require params");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+
+        let envelope_unknown = json!({
+            "method": "project_status",
+            "params": {},
+            "path": "/tmp/ungranted.cutproj"
+        });
+        let error = EditorRequest::from_native_wire(&envelope_unknown)
+            .expect_err("the native tagged envelope must reject unknown fields");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn native_wire_accepts_and_rejects_safe_integer_boundary() {
+        let valid = json!({
+            "method": "project_create",
+            "params": {
+                "name": "Untitled",
+                "fpsNum": MAX_SAFE_INTEGER
+            }
+        });
+        let request = EditorRequest::from_native_wire(&valid)
+            .expect("MAX_SAFE_INTEGER is valid on the generated wire");
+        assert_eq!(
+            request,
+            EditorRequest::ProjectCreate {
+                name: "Untitled".to_owned(),
+                aspect: None,
+                fps_num: Some(MAX_SAFE_INTEGER),
+                fps_den: None,
+            }
+        );
+
+        let invalid = json!({
+            "method": "project_create",
+            "params": {
+                "name": "Untitled",
+                "fpsNum": MAX_SAFE_INTEGER + 1
+            }
+        });
+        let error = EditorRequest::from_native_wire(&invalid)
+            .expect_err("integers above the JavaScript safe range must be rejected");
+        assert_eq!(error.code, ErrorCode::SchemaUnsupported);
+    }
+
+    #[test]
+    fn native_wire_matches_sidecar_parser_and_tagged_shape() {
+        let request = EditorRequest::ProjectCreate {
+            name: "Untitled".to_owned(),
+            aspect: Some("16:9".to_owned()),
+            fps_num: Some(30),
+            fps_den: Some(1),
+        };
+        let wire = serde_json::to_value(&request).expect("request should serialize");
+        let object = wire
+            .as_object()
+            .expect("tagged request should be an object");
+        let method = object
+            .get("method")
+            .and_then(Value::as_str)
+            .expect("tagged request should carry a method");
+        let params = object
+            .get("params")
+            .expect("tagged request should carry params");
+
+        let native = EditorRequest::from_native_wire(&wire).expect("native request should parse");
+        let sidecar =
+            EditorRequest::from_wire(method, params).expect("sidecar request should parse");
+
+        assert_eq!(native, request);
+        assert_eq!(native, sidecar);
+        assert_eq!(serde_json::to_value(&native).unwrap(), wire);
+    }
+}

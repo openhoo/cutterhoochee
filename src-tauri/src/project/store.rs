@@ -234,6 +234,22 @@ impl ProjectStore {
             workspace_id: self.inner.workspace_id.clone(),
         })
     }
+    /// Read the status fields without cloning the active document.
+    pub(crate) fn metadata(&self) -> Result<(String, String, String, u64), AppError> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| AppError::io("The project writer lock is unavailable"))?;
+        ensure_healthy(&state)?;
+        verify_store_identity(&self.inner, state.project_identity)?;
+        Ok((
+            self.inner.stable_project_id.clone(),
+            self.inner.workspace_id.clone(),
+            state.envelope.document.name.clone(),
+            state.envelope.document.revision,
+        ))
+    }
 
     /// The project UUID is immutable and remains available for recovery/error
     /// reporting even when the current store has been poisoned.
@@ -353,7 +369,7 @@ impl ProjectStore {
         }
         candidate.revision = before.revision;
         candidate.validate()?;
-        let delta = before.diff(&candidate)?;
+        let delta = before.diff_validated(&candidate)?;
         let result = EditResult {
             transaction_id,
             label,
@@ -484,7 +500,7 @@ impl ProjectStore {
         }
         candidate.revision = current_revision;
         candidate.validate()?;
-        let delta = before.diff(&candidate)?;
+        let delta = before.diff_validated(&candidate)?;
         let changed = !delta.is_empty();
         let next_revision = if changed {
             current_revision
@@ -593,8 +609,8 @@ impl ProjectStore {
 
         let mut candidate = state.envelope.document.clone();
         match action {
-            HistoryAction::Undo => entry.delta.apply_backward(&mut candidate)?,
-            HistoryAction::Redo => entry.delta.apply_forward(&mut candidate)?,
+            HistoryAction::Undo => entry.delta.apply_validated(&mut candidate, false)?,
+            HistoryAction::Redo => entry.delta.apply_validated(&mut candidate, true)?,
         }
         let next_revision = candidate
             .revision

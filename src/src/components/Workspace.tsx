@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   ChevronDown,
@@ -60,6 +60,7 @@ import { MediaLibrary } from "@/components/MediaLibrary";
 import { Preview } from "@/components/Preview";
 import { ProviderSettings } from "@/components/ProviderSettings";
 import { Timeline } from "@/components/Timeline";
+import { PlaybackFrameStore, usePlaybackFrame } from "@/components/PlaybackFrameStore";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 
 export type Theme = "dark" | "light";
@@ -205,37 +206,16 @@ export function Workspace({
   const [exportOpen, setExportOpen] = useState(false);
   const [eventLog, setEventLog] = useState<WorkspaceEvent[]>([]);
   const [transportPlaying, setTransportPlaying] = useState(false);
-  const [transportFrame, setTransportFrame] = useState(selection.playheadFrame);
   const chatResizeStart = useRef<{ x: number; width: number } | null>(null);
   const timelineResizeStart = useRef<{ y: number; height: number } | null>(null);
   const permissionAnswering = useRef<string | null>(null);
   const permissionPollToken = useRef(0);
+  const frameStoreRef = useRef<PlaybackFrameStore | null>(null);
+  const frameStore = frameStoreRef.current ?? (frameStoreRef.current = new PlaybackFrameStore(selection.playheadFrame));
 
   const refresh = useCallback(async () => {
-    const expectedContext = client.getContext();
     await onRefresh();
-    const loadedContext = client.getContext();
-    if (
-      loadedContext.generation !== expectedContext.generation ||
-      loadedContext.projectId !== expectedContext.projectId
-    ) {
-      return;
-    }
-    try {
-      const nextTimeline = await client.timelineSnapshot();
-      const currentContext = client.getContext();
-      if (
-        currentContext.generation !== expectedContext.generation ||
-        currentContext.projectId !== expectedContext.projectId
-      ) {
-        return;
-      }
-      onTimeline(nextTimeline);
-      setSelection(nextTimeline.selection);
-    } catch {
-      // The parent refresh already presents the authoritative native error.
-    }
-  }, [client, onRefresh, onTimeline]);
+  }, [onRefresh]);
 
   const commit = useCallback(
     async (label: string, operations: readonly EditOp[]) => {
@@ -266,7 +246,7 @@ export function Workspace({
         setNotice(errorMessage(error));
       }
     },
-    [client, onTimeline],
+    [client, frameStore, onTimeline],
   );
 
   const projectCommand = useCallback(
@@ -282,7 +262,8 @@ export function Workspace({
   );
 
   useEffect(() => {
-    setSelection(timeline?.selection ?? { clipIds: [], textIds: [], playheadFrame: 0 });
+    const nextSelection = timeline?.selection ?? { clipIds: [], textIds: [], playheadFrame: 0 };
+    setSelection(nextSelection);
   }, [timeline]);
 
   useEffect(() => {
@@ -418,11 +399,18 @@ export function Workspace({
     }
   }, [permission, projectCommand]);
 
-  const selectedClip = snapshot.document.clips.find((clip) => selection.clipIds.includes(clip.id));
-  const activeTrack = selectedClip
-    ? snapshot.document.tracks.find((track) => track.id === selectedClip.trackId)
-    : undefined;
-  const selectedTransitions = selectedClip ? findTransitionForClip(snapshot, selectedClip.id) : [];
+  const selectedClip = useMemo(() => {
+    const selectedClipIds = new Set(selection.clipIds);
+    return snapshot.document.clips.find((clip) => selectedClipIds.has(clip.id));
+  }, [selection.clipIds, snapshot.document.clips]);
+  const activeTrack = useMemo(
+    () => selectedClip ? snapshot.document.tracks.find((track) => track.id === selectedClip.trackId) : undefined,
+    [selectedClip, snapshot.document.tracks],
+  );
+  const selectedTransitions = useMemo(
+    () => selectedClip ? findTransitionForClip(snapshot, selectedClip.id) : [],
+    [selectedClip, snapshot],
+  );
   const appendAsset = useCallback(async (assetId: string) => {
     const asset = snapshot.document.assets.find((candidate) => candidate.id === assetId);
     if (!asset) return;
@@ -487,6 +475,9 @@ export function Workspace({
   const handlePlayState = useCallback((playing: boolean) => {
     setTransportPlaying(playing);
   }, []);
+  const handleFrameChange = useCallback((frame: number) => {
+    frameStore.set(frame);
+  }, [frameStore]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -592,11 +583,11 @@ export function Workspace({
         <main className="editor-main">
           <div className="preview-toolbar">
             <div className="preview-breadcrumb"><span>Preview</span><span className="toolbar-separator">/</span><span className="muted">{snapshot.document.profile.width} × {snapshot.document.profile.height}</span></div>
-            <div className="preview-meta"><span className="quality-pill">{transportPlaying ? "Playing" : "Ready"}</span><span>{formatTimecode(transportFrame, snapshot.document.profile.fpsNum, snapshot.document.profile.fpsDen)} / {formatDuration(duration, snapshot.document.profile.fpsNum, snapshot.document.profile.fpsDen)}</span></div>
+            <div className="preview-meta"><PlaybackToolbarMeta frameStore={frameStore} playing={transportPlaying} duration={duration} fpsNum={snapshot.document.profile.fpsNum} fpsDen={snapshot.document.profile.fpsDen} /></div>
           </div>
-          <div className="preview-stage"><Preview client={client} snapshot={snapshot} selection={selection} playing={transportPlaying} onPlayingChange={handlePlayState} onFrameChange={setTransportFrame} onSelectionChange={updateSelection} onNotice={setNotice} /></div>
+          <div className="preview-stage"><Preview client={client} snapshot={snapshot} selection={selection} playing={transportPlaying} onPlayingChange={handlePlayState} onFrameChange={handleFrameChange} onSelectionChange={updateSelection} onNotice={setNotice} /></div>
           <div className={isDraggingTimeline ? "resize-handle horizontal dragging" : "resize-handle horizontal"} role="separator" aria-label="Resize timeline" aria-orientation="horizontal" tabIndex={0} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); timelineResizeStart.current = { y: event.clientY, height: timelineHeight }; setIsDraggingTimeline(true); }} onKeyDown={(event) => { if (event.key === "ArrowUp") setTimelineHeight((height) => Math.min(520, height + 16)); if (event.key === "ArrowDown") setTimelineHeight((height) => Math.max(180, height - 16)); }} />
-          <section className="timeline-dock" aria-label="Timeline"><Timeline client={client} snapshot={snapshot} timeline={timeline} selection={{ ...selection, playheadFrame: transportFrame }} onSelectionChange={updateSelection} onEdit={commit} onNotice={setNotice} /></section>
+          <section className="timeline-dock" aria-label="Timeline"><Timeline client={client} snapshot={snapshot} timeline={timeline} selection={selection} playheadStore={frameStore} onSelectionChange={updateSelection} onEdit={commit} onNotice={setNotice} /></section>
         </main>
 
         {rightOpen ? (
@@ -636,6 +627,23 @@ export function Workspace({
     </div>
   );
 }
+
+const PlaybackToolbarMeta = memo(function PlaybackToolbarMeta({
+  frameStore,
+  playing,
+  duration,
+  fpsNum,
+  fpsDen,
+}: {
+  frameStore: PlaybackFrameStore;
+  playing: boolean;
+  duration: number;
+  fpsNum: number;
+  fpsDen: number;
+}) {
+  const frame = usePlaybackFrame(frameStore);
+  return <><span className="quality-pill">{playing ? "Playing" : "Ready"}</span><span>{formatTimecode(frame, fpsNum, fpsDen)} / {formatDuration(duration, fpsNum, fpsDen)}</span></>;
+});
 
 export function StartScreen({
   client,

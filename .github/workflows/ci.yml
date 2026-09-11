@@ -126,7 +126,7 @@ jobs:
           set -euo pipefail
           pnpm build:agent
           pnpm build:web
-      - name: Run UI unit tests
+      - name: Run UI and agent unit tests
         run: pnpm test:unit
 
   native:
@@ -163,6 +163,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Trust the container-mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Select the repository Rust toolchain
         run: |
           set -euo pipefail

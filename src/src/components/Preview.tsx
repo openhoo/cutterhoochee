@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, Pause, Play, RotateCcw, StepBack, StepForward, Volume2 } from "lucide-react";
 
 import type { EditorClient, ProjectSnapshot, TimelineSelection } from "@cutterhoochee/shared";
@@ -17,7 +17,7 @@ export type PreviewProps = {
   onNotice: (notice: string) => void;
 };
 
-export function Preview({ client, snapshot, selection, playing, onPlayingChange, onFrameChange, onSelectionChange, onNotice }: PreviewProps) {
+export const Preview = memo(function Preview({ client, snapshot, selection, playing, onPlayingChange, onFrameChange, onSelectionChange, onNotice }: PreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<PreviewEngine | null>(null);
   const pauseSelectionFrameRef = useRef<number | null>(null);
@@ -35,8 +35,9 @@ export function Preview({ client, snapshot, selection, playing, onPlayingChange,
     const canvas = canvasRef.current;
     if (!canvas) return;
     const engine = new PreviewEngine({ canvas, client, onState: (next) => {
+      const previous = stateRef.current;
       stateRef.current = next;
-      setState(next);
+      if (previous.state !== next.state || previous.frame !== next.frame || previous.durationFrames !== next.durationFrames || previous.quality !== next.quality || previous.error !== next.error) setState(next);
       callbacks.current.onFrameChange(next.frame);
       if (next.state === "paused" && pauseRequestedRef.current) {
         pauseRequestedRef.current = false;
@@ -125,4 +126,4 @@ export function Preview({ client, snapshot, selection, playing, onPlayingChange,
   const togglePlaying = () => onPlayingChange(!playing);
 
   return <div className="preview-component"><div className="canvas-wrap" style={{ aspectRatio: `${profile.width} / ${profile.height}`, "--canvas-ratio": ratio } as CSSProperties}><canvas ref={canvasRef} width={profile.width} height={profile.height} aria-label="Video preview" />{state.state === "buffering" ? <div className="preview-overlay"><span className="spinner" />Buffering preview…</div> : null}{state.state === "error" || engineError ? <div className="preview-overlay error"><AlertTriangle aria-hidden="true" /><span>{engineError || state.error || "Preview unavailable"}</span><Button variant="secondary" size="sm" onClick={() => { setEngineError(null); void engineRef.current?.refresh().catch((error) => onNotice(error instanceof Error ? error.message : "Preview refresh failed.")); }}>Retry preview</Button></div> : null}<div className="canvas-corner-label">{profile.width}×{profile.height} · {state.quality === "software" ? "Software" : "Auto"}</div></div><div className="preview-controls"><div className="transport-buttons"><Button variant="ghost" size="icon" aria-label="Previous frame" onClick={() => step(-1)}><StepBack aria-hidden="true" /></Button><Button variant="primary" size="icon" aria-label={playing ? "Pause" : "Play"} onClick={togglePlaying}>{playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}</Button><Button variant="ghost" size="icon" aria-label="Next frame" onClick={() => step(1)}><StepForward aria-hidden="true" /></Button></div><div className="preview-seek"><span>{formatTimecode(state.frame ?? selection.playheadFrame, profile.fpsNum, profile.fpsDen)}</span><input type="range" min={0} max={Math.max(0, duration - 1)} value={Math.min(duration - 1, state.frame ?? selection.playheadFrame)} onChange={(event) => void seek(Number(event.target.value))} aria-label="Preview playhead" /><span>{formatDuration(duration, profile.fpsNum, profile.fpsDen)}</span></div><div className="preview-status"><span className={`transport-state ${state.state}`}>{state.state}</span><button type="button" className="quality-select" onClick={() => setQuality((current) => current === "software" ? "auto" : "software")} title="Toggle software preview"><RotateCcw aria-hidden="true" />{state.quality}</button><span role="img" aria-label="Preview audio is scheduled by the native clock" title="Preview audio is scheduled by the native clock"><Volume2 aria-hidden="true" /></span></div></div></div>;
-}
+});

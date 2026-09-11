@@ -509,15 +509,15 @@ pub fn compile_render_plan(
     // this order (rather than sorting IDs) gives both renderers identical
     // floating-point accumulation for overlapping music and clip audio.
     for track in &document.tracks {
-        let include_video_audio = track.kind == TrackKind::Video;
-        let include_audio = track.kind == TrackKind::Audio;
-        if !include_video_audio && !include_audio {
+        let include_audio = matches!(track.kind, TrackKind::Video | TrackKind::Audio);
+        if track.muted || !include_audio {
             continue;
         }
-        for clip in document.clips.iter().filter(|clip| {
-            clip.track_id == track.id
-                && (include_audio || (include_video_audio && clip.audio_enabled))
-        }) {
+        for clip in document
+            .clips
+            .iter()
+            .filter(|clip| clip.track_id == track.id && clip.audio_enabled)
+        {
             append_audio_segment(&mut audio_segments, clip, track.id.as_str(), &assets, fps)?;
         }
     }
@@ -1142,6 +1142,14 @@ pub(crate) fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::artifacts::ArtifactStore;
+    use crate::project::model::{
+        AspectRatio, AssetKind, AssetManifest, FitMode, FrameRate, MediaClip, NormalizedAsset,
+        NormalizedAudio, NormalizedVideo, OriginalMediaMetadata, OriginalStreamKind,
+        OriginalStreamMetadata, ProjectDocument, TrackKind, AUDIO_SAMPLE_RATE,
+    };
+    use std::path::PathBuf;
+    use uuid::Uuid;
 
     #[test]
     fn frame_sample_conversion_is_exact_for_all_supported_rates() {
@@ -1177,5 +1185,293 @@ mod tests {
         let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
         let reader = decoder.read_info().unwrap();
         assert_eq!((reader.info().width, reader.info().height), (2, 1));
+    }
+
+    const VIDEO_ASSET_ID: &str = "10000000-0000-4000-8000-000000000001";
+    const AUDIO_ASSET_ID: &str = "10000000-0000-4000-8000-000000000002";
+    const VIDEO_CLIP_ID: &str = "20000000-0000-4000-8000-000000000001";
+    const AUDIO_CLIP_ID: &str = "20000000-0000-4000-8000-000000000002";
+    const CLIP_DURATION_FRAMES: u64 = 30;
+
+    struct ArtifactFixture {
+        root: PathBuf,
+        store: ArtifactStore,
+    }
+
+    impl ArtifactFixture {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("cutterhoochee-render-plan-{}", Uuid::new_v4()));
+            let font_resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+            let store = ArtifactStore::for_project(&root, Uuid::new_v4().to_string())
+                .expect("artifact store")
+                .with_font_resource_dir(&font_resource_dir)
+                .expect("bundled font resources");
+            Self { root, store }
+        }
+    }
+
+    impl Drop for ArtifactFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn normalized_audio(pcm_artifact_id: &str) -> NormalizedAudio {
+        NormalizedAudio {
+            pcm_artifact_id: pcm_artifact_id.to_owned(),
+            sample_count: AUDIO_SAMPLE_RATE as u64,
+            sample_rate: AUDIO_SAMPLE_RATE,
+            channels: 2,
+            duration_frames: CLIP_DURATION_FRAMES,
+            active_start_sample: 0,
+            active_end_sample: AUDIO_SAMPLE_RATE as u64,
+            source_start_ms: 0,
+            source_end_ms: 1_000,
+        }
+    }
+
+    fn ready_video_asset() -> AssetManifest {
+        AssetManifest {
+            id: VIDEO_ASSET_ID.to_owned(),
+            kind: AssetKind::Video,
+            content_hash: "video-hash".to_owned(),
+            original: OriginalMediaMetadata {
+                file_name: "video.mp4".to_owned(),
+                streams: vec![
+                    OriginalStreamMetadata {
+                        kind: OriginalStreamKind::Video,
+                        codec: "h264".to_owned(),
+                        duration_ms: Some(1_000),
+                        width: Some(1_920),
+                        height: Some(1_080),
+                        ..Default::default()
+                    },
+                    OriginalStreamMetadata {
+                        kind: OriginalStreamKind::Audio,
+                        codec: "aac".to_owned(),
+                        duration_ms: Some(1_000),
+                        sample_rate: Some(AUDIO_SAMPLE_RATE),
+                        channels: Some(2),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            normalization: Some(NormalizedAsset {
+                renderer_version: "test".to_owned(),
+                epoch_ms: 0,
+                video: Some(NormalizedVideo {
+                    master_artifact_id: "video-master".to_owned(),
+                    proxy_artifact_id: None,
+                    frame_count: CLIP_DURATION_FRAMES,
+                    width: 1_920,
+                    height: 1_080,
+                    fps_num: 30,
+                    fps_den: 1,
+                    active_start_frame: 0,
+                    active_end_frame: CLIP_DURATION_FRAMES,
+                    source_start_ms: 0,
+                    source_end_ms: 1_000,
+                    proxy_frame_count: Some(CLIP_DURATION_FRAMES),
+                }),
+                audio: Some(normalized_audio("video-pcm")),
+            }),
+        }
+    }
+
+    fn ready_audio_asset() -> AssetManifest {
+        AssetManifest {
+            id: AUDIO_ASSET_ID.to_owned(),
+            kind: AssetKind::Audio,
+            content_hash: "audio-hash".to_owned(),
+            original: OriginalMediaMetadata {
+                file_name: "audio.wav".to_owned(),
+                streams: vec![OriginalStreamMetadata {
+                    kind: OriginalStreamKind::Audio,
+                    codec: "pcm_s16le".to_owned(),
+                    duration_ms: Some(1_000),
+                    sample_rate: Some(AUDIO_SAMPLE_RATE),
+                    channels: Some(2),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            normalization: Some(NormalizedAsset {
+                renderer_version: "test".to_owned(),
+                epoch_ms: 0,
+                video: None,
+                audio: Some(normalized_audio("audio-pcm")),
+            }),
+        }
+    }
+
+    fn media_clip(id: &str, track_id: &str, asset_id: &str, audio_enabled: bool) -> MediaClip {
+        MediaClip {
+            id: id.to_owned(),
+            track_id: track_id.to_owned(),
+            asset_id: asset_id.to_owned(),
+            start_frame: 0,
+            in_frame: 0,
+            duration_frames: CLIP_DURATION_FRAMES,
+            fit: FitMode::Contain,
+            center_x: 5_000,
+            center_y: 5_000,
+            scale: 10_000,
+            opacity: 10_000,
+            gain_db: 0.0,
+            audio_enabled,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+        }
+    }
+
+    fn track_id(document: &ProjectDocument, kind: TrackKind) -> String {
+        document
+            .tracks
+            .iter()
+            .find(|track| track.kind == kind)
+            .expect("fixture track")
+            .id
+            .clone()
+    }
+
+    fn fixture_document(video_audio_enabled: bool, audio_audio_enabled: bool) -> ProjectDocument {
+        let mut document = ProjectDocument::new(
+            "Render plan audio controls",
+            AspectRatio::Landscape,
+            FrameRate::FPS_30,
+        )
+        .expect("project document");
+        let video_track_id = track_id(&document, TrackKind::Video);
+        let audio_track_id = track_id(&document, TrackKind::Audio);
+        document.assets = vec![ready_video_asset(), ready_audio_asset()];
+        document.clips = vec![
+            media_clip(
+                VIDEO_CLIP_ID,
+                &video_track_id,
+                VIDEO_ASSET_ID,
+                video_audio_enabled,
+            ),
+            media_clip(
+                AUDIO_CLIP_ID,
+                &audio_track_id,
+                AUDIO_ASSET_ID,
+                audio_audio_enabled,
+            ),
+        ];
+        document.validate().expect("valid render plan fixture");
+        document
+    }
+
+    fn audio_clip_ids(plan: &RenderPlan) -> Vec<&str> {
+        plan.audio
+            .segments
+            .iter()
+            .map(|segment| segment.clip_id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn muted_tracks_omit_audio_and_unmuting_restores_it() {
+        let artifacts = ArtifactFixture::new();
+        let mut document = fixture_document(true, true);
+        let baseline = compile_render_plan(&document, &artifacts.store).expect("baseline plan");
+        assert_eq!(
+            audio_clip_ids(&baseline),
+            vec![VIDEO_CLIP_ID, AUDIO_CLIP_ID]
+        );
+        let baseline_layers = baseline.layers.clone();
+
+        let audio_track_id = track_id(&document, TrackKind::Audio);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == audio_track_id)
+            .expect("audio track")
+            .muted = true;
+        let muted_audio =
+            compile_render_plan(&document, &artifacts.store).expect("muted audio-track plan");
+        assert_eq!(audio_clip_ids(&muted_audio), vec![VIDEO_CLIP_ID]);
+        assert_eq!(muted_audio.layers, baseline_layers);
+        assert_eq!(muted_audio.duration_frames, baseline.duration_frames);
+        assert_eq!(
+            muted_audio.audio.total_samples,
+            baseline.audio.total_samples
+        );
+
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == audio_track_id)
+            .expect("audio track")
+            .muted = false;
+        let unmuted_audio =
+            compile_render_plan(&document, &artifacts.store).expect("unmuted audio-track plan");
+        assert_eq!(
+            audio_clip_ids(&unmuted_audio),
+            vec![VIDEO_CLIP_ID, AUDIO_CLIP_ID]
+        );
+        assert_eq!(unmuted_audio.layers, baseline_layers);
+
+        let video_track_id = track_id(&document, TrackKind::Video);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == video_track_id)
+            .expect("video track")
+            .muted = true;
+        let muted_video =
+            compile_render_plan(&document, &artifacts.store).expect("muted video-track plan");
+        assert_eq!(audio_clip_ids(&muted_video), vec![AUDIO_CLIP_ID]);
+        assert_eq!(muted_video.layers, baseline_layers);
+        assert_eq!(muted_video.duration_frames, baseline.duration_frames);
+        assert_eq!(
+            muted_video.audio.total_samples,
+            baseline.audio.total_samples
+        );
+    }
+
+    #[test]
+    fn disabled_audio_clips_are_omitted_on_video_and_audio_tracks_and_reenabled_restores_segments()
+    {
+        let artifacts = ArtifactFixture::new();
+        let mut document = fixture_document(false, false);
+        let disabled = compile_render_plan(&document, &artifacts.store).expect("disabled plan");
+        assert!(audio_clip_ids(&disabled).is_empty());
+        let video_layer = disabled
+            .layers
+            .iter()
+            .find(|layer| layer.kind == RenderLayerKind::Video)
+            .expect("video layer");
+        assert_eq!(
+            video_layer
+                .segments
+                .iter()
+                .map(|segment| segment.clip_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![VIDEO_CLIP_ID]
+        );
+        assert_eq!(disabled.duration_frames, CLIP_DURATION_FRAMES);
+        assert_eq!(
+            disabled.audio.total_samples,
+            sample_at_frame(CLIP_DURATION_FRAMES, FrameRate::FPS_30).expect("sample count")
+        );
+        let disabled_layers = disabled.layers.clone();
+        let revision = document.revision;
+        assert!(document.clips.iter().all(|clip| !clip.audio_enabled));
+
+        for clip in &mut document.clips {
+            clip.audio_enabled = true;
+        }
+        let reenabled = compile_render_plan(&document, &artifacts.store).expect("re-enabled plan");
+        assert_eq!(
+            audio_clip_ids(&reenabled),
+            vec![VIDEO_CLIP_ID, AUDIO_CLIP_ID]
+        );
+        assert_eq!(reenabled.layers, disabled_layers);
+        assert_eq!(reenabled.duration_frames, disabled.duration_frames);
+        assert_eq!(reenabled.audio.total_samples, disabled.audio.total_samples);
+        assert_eq!(document.revision, revision);
     }
 }

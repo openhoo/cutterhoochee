@@ -398,13 +398,21 @@ fn ensure_track_unlocked(document: &ProjectDocument, id: &str) -> Result<(), App
     Ok(())
 }
 
+fn ensure_clip_track_unlocked(
+    document: &ProjectDocument,
+    clip_id: &str,
+) -> Result<usize, AppError> {
+    let index = clip_index(document, clip_id)?;
+    let track_id = document.clips[index].track_id.clone();
+    ensure_track_unlocked(document, &track_id)?;
+    Ok(index)
+}
+
 /// A clip mutation can move source-owned captions even when the caption is on
 /// a separate text track. Both the clip track and every owned caption track
 /// therefore participate in the lock check.
 fn ensure_clip_mutable(document: &ProjectDocument, clip_id: &str) -> Result<usize, AppError> {
-    let index = clip_index(document, clip_id)?;
-    let track_id = document.clips[index].track_id.clone();
-    ensure_track_unlocked(document, &track_id)?;
+    let index = ensure_clip_track_unlocked(document, clip_id)?;
     let owned_track_ids: Vec<String> = document
         .text_items
         .iter()
@@ -443,12 +451,12 @@ fn validate_text_against_document(
     let tracks: HashMap<_, _> = document
         .tracks
         .iter()
-        .map(|track| (track.id.clone(), track))
+        .map(|track| (track.id.as_str(), track))
         .collect();
     let clips: HashMap<_, _> = document
         .clips
         .iter()
-        .map(|clip| (clip.id.clone(), clip))
+        .map(|clip| (clip.id.as_str(), clip))
         .collect();
     text.validate(&tracks, &clips)
 }
@@ -465,17 +473,46 @@ fn ensure_transition_track_mutable(
     right_clip_id: &str,
 ) -> Result<(), AppError> {
     let index = clip_index(document, right_clip_id)?;
-    let track_id = document.clips[index].track_id.clone();
+    let track_id = document.clips[index].track_id.as_str();
     let shift_start_frame = document.clips[index].start_frame;
-    let mut affected: Vec<String> = document
+    let mut affected: Vec<&MediaClip> = document
         .clips
         .iter()
         .filter(|clip| clip.track_id == track_id && clip.start_frame >= shift_start_frame)
-        .map(|clip| clip.id.clone())
         .collect();
-    affected.sort();
-    for id in affected {
-        ensure_clip_mutable(document, &id)?;
+    affected.sort_unstable_by_key(|clip| clip.id.as_str());
+
+    let tracks: HashMap<_, _> = document
+        .tracks
+        .iter()
+        .map(|track| (track.id.as_str(), track))
+        .collect();
+    let mut caption_tracks: HashMap<&str, Vec<&str>> = HashMap::new();
+    for text in &document.text_items {
+        if let Some(owner_clip_id) = text.owner_clip_id.as_deref() {
+            caption_tracks
+                .entry(owner_clip_id)
+                .or_default()
+                .push(text.track_id.as_str());
+        }
+    }
+    for clip in affected {
+        let clip_track = tracks
+            .get(clip.track_id.as_str())
+            .ok_or_else(|| invalid("The requested track does not exist"))?;
+        if clip_track.locked {
+            return Err(invalid(format!("Track {} is locked", clip_track.name)));
+        }
+        if let Some(track_ids) = caption_tracks.get(clip.id.as_str()) {
+            for track_id in track_ids {
+                let caption_track = tracks
+                    .get(*track_id)
+                    .ok_or_else(|| invalid("The requested track does not exist"))?;
+                if caption_track.locked {
+                    return Err(invalid(format!("Track {} is locked", caption_track.name)));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -566,12 +603,77 @@ fn apply_remove_track(
             "The track is not empty; set deleteItems to remove its items",
         ));
     }
-    for clip_id in &clip_ids {
-        ensure_clip_mutable(document, clip_id)?;
+
+    {
+        let tracks: HashMap<_, _> = document
+            .tracks
+            .iter()
+            .map(|track| (track.id.as_str(), track))
+            .collect();
+        let clips: HashMap<_, _> = document
+            .clips
+            .iter()
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect();
+        let text_items: HashMap<_, _> = document
+            .text_items
+            .iter()
+            .map(|text| (text.id.as_str(), text))
+            .collect();
+        let mut caption_tracks: HashMap<&str, Vec<&str>> = HashMap::new();
+        for text in &document.text_items {
+            if let Some(owner_clip_id) = text.owner_clip_id.as_deref() {
+                caption_tracks
+                    .entry(owner_clip_id)
+                    .or_default()
+                    .push(text.track_id.as_str());
+            }
+        }
+        for clip_id in &clip_ids {
+            let clip = clips
+                .get(clip_id.as_str())
+                .ok_or_else(|| invalid("The requested clip does not exist"))?;
+            let clip_track = tracks
+                .get(clip.track_id.as_str())
+                .ok_or_else(|| invalid("The requested track does not exist"))?;
+            if clip_track.locked {
+                return Err(invalid(format!("Track {} is locked", clip_track.name)));
+            }
+            if let Some(track_ids) = caption_tracks.get(clip_id.as_str()) {
+                for caption_track_id in track_ids {
+                    let caption_track = tracks
+                        .get(*caption_track_id)
+                        .ok_or_else(|| invalid("The requested track does not exist"))?;
+                    if caption_track.locked {
+                        return Err(invalid(format!("Track {} is locked", caption_track.name)));
+                    }
+                }
+            }
+        }
+        for text_id in &text_ids {
+            let text = text_items
+                .get(text_id.as_str())
+                .ok_or_else(|| invalid("The requested text item does not exist"))?;
+            let text_track = tracks
+                .get(text.track_id.as_str())
+                .ok_or_else(|| invalid("The requested track does not exist"))?;
+            if text_track.locked {
+                return Err(invalid(format!("Track {} is locked", text_track.name)));
+            }
+            if let Some(owner_clip_id) = text.owner_clip_id.as_deref() {
+                let owner_clip = clips
+                    .get(owner_clip_id)
+                    .ok_or_else(|| invalid("The requested clip does not exist"))?;
+                let owner_track = tracks
+                    .get(owner_clip.track_id.as_str())
+                    .ok_or_else(|| invalid("The requested track does not exist"))?;
+                if owner_track.locked {
+                    return Err(invalid(format!("Track {} is locked", owner_track.name)));
+                }
+            }
+        }
     }
-    for text_id in &text_ids {
-        ensure_text_mutable(document, text_index(document, text_id)?)?;
-    }
+
     if delete_items {
         let deleted: std::collections::HashSet<&str> =
             clip_ids.iter().map(String::as_str).collect();
@@ -635,7 +737,7 @@ fn apply_trim_clip(
     start_frame: u64,
     duration_frames: u64,
 ) -> Result<(), AppError> {
-    let index = clip_index(document, clip_id)?;
+    let index = ensure_clip_track_unlocked(document, clip_id)?;
     if transition_clip_ids(document, clip_id) {
         return Err(invalid(
             "Remove the clip's transition in the same batch before trimming it",
@@ -643,7 +745,6 @@ fn apply_trim_clip(
     }
 
     let original = document.clips[index].clone();
-    ensure_track_unlocked(document, &original.track_id)?;
     let mut clip = original.clone();
     clip.in_frame = in_frame;
     clip.start_frame = start_frame;
@@ -719,7 +820,7 @@ fn apply_update_clip(
     clip_id: &str,
     patch: &ClipPatch,
 ) -> Result<(), AppError> {
-    let index = ensure_clip_mutable(document, clip_id)?;
+    let index = ensure_clip_track_unlocked(document, clip_id)?;
     let mut clip = document.clips[index].clone();
     if let Some(value) = patch.fit {
         clip.fit = value;
@@ -754,15 +855,56 @@ fn apply_update_clip(
 }
 
 fn apply_remove_clips(document: &mut ProjectDocument, clip_ids: &[String]) -> Result<(), AppError> {
-    let mut seen = std::collections::HashSet::new();
-    let mut indices = Vec::with_capacity(clip_ids.len());
-    for id in clip_ids {
-        if !seen.insert(id.as_str()) {
-            return Err(invalid("removeClips cannot contain duplicate IDs"));
-        }
-        indices.push(ensure_clip_mutable(document, id)?);
-    }
     let deleted: std::collections::HashSet<&str> = clip_ids.iter().map(String::as_str).collect();
+    {
+        let mut seen = std::collections::HashSet::with_capacity(clip_ids.len());
+        let tracks: HashMap<_, _> = document
+            .tracks
+            .iter()
+            .map(|track| (track.id.as_str(), track))
+            .collect();
+        let clips: HashMap<_, _> = document
+            .clips
+            .iter()
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect();
+        let mut caption_tracks: HashMap<&str, Vec<&str>> = HashMap::new();
+        for text in &document.text_items {
+            if let Some(owner_clip_id) = text.owner_clip_id.as_deref() {
+                caption_tracks
+                    .entry(owner_clip_id)
+                    .or_default()
+                    .push(text.track_id.as_str());
+            }
+        }
+
+        for id in clip_ids {
+            if !seen.insert(id.as_str()) {
+                return Err(invalid("removeClips cannot contain duplicate IDs"));
+            }
+            parse_uuid(id, "clipId")?;
+            let clip = clips
+                .get(id.as_str())
+                .ok_or_else(|| invalid("The requested clip does not exist"))?;
+            let track = tracks
+                .get(clip.track_id.as_str())
+                .ok_or_else(|| invalid("The requested track does not exist"))?;
+            if track.locked {
+                return Err(invalid(format!("Track {} is locked", track.name)));
+            }
+            if let Some(track_ids) = caption_tracks.get(id.as_str()) {
+                for track_id in track_ids {
+                    let track = tracks
+                        .get(*track_id)
+                        .ok_or_else(|| invalid("The requested track does not exist"))?;
+                    if track.locked {
+                        return Err(invalid(format!("Track {} is locked", track.name)));
+                    }
+                }
+            }
+        }
+    }
+
     document
         .clips
         .retain(|clip| !deleted.contains(clip.id.as_str()));
@@ -775,7 +917,6 @@ fn apply_remove_clips(document: &mut ProjectDocument, clip_ids: &[String]) -> Re
         !deleted.contains(transition.left_clip_id.as_str())
             && !deleted.contains(transition.right_clip_id.as_str())
     });
-    let _ = indices;
     Ok(())
 }
 
@@ -793,30 +934,43 @@ fn apply_remove_range(
     crate::ipc::validate_safe_integer(start_frame, "startFrame")?;
     crate::ipc::validate_safe_integer(end_frame, "endFrame")?;
     let interval = crate::project::model::FrameInterval::from_bounds(start_frame, end_frame)?;
-    let affected_clip_ids: Vec<String> = document
-        .clips
-        .iter()
-        .filter(|clip| {
-            clip.interval()
+    {
+        let tracks: HashMap<_, _> = document
+            .tracks
+            .iter()
+            .map(|track| (track.id.as_str(), track))
+            .collect();
+        for clip in &document.clips {
+            let affected = clip
+                .interval()
                 .ok()
                 .and_then(|clip_interval| clip_interval.intersection(interval))
                 .is_some()
-                || (ripple && clip.start_frame >= end_frame)
-        })
-        .map(|clip| clip.id.clone())
-        .collect();
-    for clip_id in &affected_clip_ids {
-        ensure_clip_mutable(document, clip_id)?;
-    }
-    for text in &document.text_items {
-        let affected = text
-            .timeline_interval()
-            .and_then(Result::ok)
-            .and_then(|text_interval| text_interval.intersection(interval))
-            .is_some()
-            || (ripple && text.start_frame.is_some_and(|start| start >= end_frame));
-        if affected && text.owner_clip_id.is_none() {
-            ensure_track_unlocked(document, &text.track_id)?;
+                || (ripple && clip.start_frame >= end_frame);
+            if affected {
+                let track = tracks
+                    .get(clip.track_id.as_str())
+                    .ok_or_else(|| invalid("The requested track does not exist"))?;
+                if track.locked {
+                    return Err(invalid(format!("Track {} is locked", track.name)));
+                }
+            }
+        }
+        for text in &document.text_items {
+            let affected = text
+                .timeline_interval()
+                .and_then(Result::ok)
+                .and_then(|text_interval| text_interval.intersection(interval))
+                .is_some()
+                || (ripple && text.start_frame.is_some_and(|start| start >= end_frame));
+            if affected && text.owner_clip_id.is_none() {
+                let track = tracks
+                    .get(text.track_id.as_str())
+                    .ok_or_else(|| invalid("The requested track does not exist"))?;
+                if track.locked {
+                    return Err(invalid(format!("Track {} is locked", track.name)));
+                }
+            }
         }
     }
     temporal::remove_range(document, start_frame, end_frame, ripple)
@@ -826,7 +980,7 @@ fn apply_add_text(document: &mut ProjectDocument, item: &TextItem) -> Result<(),
     ensure_new_id(document, &item.id, "text.id")?;
     ensure_track_unlocked(document, &item.track_id)?;
     if let Some(owner_clip_id) = item.owner_clip_id.as_deref() {
-        ensure_clip_mutable(document, owner_clip_id)?;
+        ensure_clip_track_unlocked(document, owner_clip_id)?;
     }
     validate_text_against_document(document, item)?;
     document.text_items.push(item.clone());
@@ -958,42 +1112,55 @@ fn apply_replace_captions(
         .map(|track| track.id.clone())
         .ok_or_else(|| invalid("A text track is required for captions"))?;
     ensure_track_unlocked(document, &text_track_id)?;
+
+    let additions = {
+        let tracks: HashMap<_, _> = document
+            .tracks
+            .iter()
+            .map(|track| (track.id.as_str(), track))
+            .collect();
+        let clips: HashMap<_, _> = document
+            .clips
+            .iter()
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect();
+        let mut additions = Vec::with_capacity(transcript.segments.len());
+        for segment in &transcript.segments {
+            let start = segment.start_frame.max(clip.in_frame);
+            let end = segment.end_frame.min(clip_source_end);
+            if start >= end {
+                continue;
+            }
+            let item = TextItem {
+                id: Uuid::new_v4().to_string(),
+                track_id: text_track_id.clone(),
+                kind: TextKind::Caption,
+                text: segment.text.clone(),
+                style,
+                color: RgbaColor {
+                    red: 255,
+                    green: 255,
+                    blue: 255,
+                    alpha: 255,
+                },
+                font_size: 48,
+                position_x: 5_000,
+                position_y: 8_500,
+                line_breaks: Vec::new(),
+                start_frame: None,
+                duration_frames: None,
+                owner_clip_id: Some(clip_id.to_owned()),
+                source_start_frame: Some(start),
+                source_duration_frames: Some(end - start),
+            };
+            item.validate(&tracks, &clips)?;
+            additions.push(item);
+        }
+        additions
+    };
     document
         .text_items
         .retain(|text| text.owner_clip_id.as_deref() != Some(clip_id));
-
-    let mut additions = Vec::new();
-    for segment in &transcript.segments {
-        let start = segment.start_frame.max(clip.in_frame);
-        let end = segment.end_frame.min(clip_source_end);
-        if start >= end {
-            continue;
-        }
-        let item = TextItem {
-            id: Uuid::new_v4().to_string(),
-            track_id: text_track_id.clone(),
-            kind: TextKind::Caption,
-            text: segment.text.clone(),
-            style,
-            color: RgbaColor {
-                red: 255,
-                green: 255,
-                blue: 255,
-                alpha: 255,
-            },
-            font_size: 48,
-            position_x: 5_000,
-            position_y: 8_500,
-            line_breaks: Vec::new(),
-            start_frame: None,
-            duration_frames: None,
-            owner_clip_id: Some(clip_id.to_owned()),
-            source_start_frame: Some(start),
-            source_duration_frames: Some(end - start),
-        };
-        validate_text_against_document(document, &item)?;
-        additions.push(item);
-    }
     document.text_items.extend(additions);
     Ok(())
 }
@@ -1074,11 +1241,22 @@ pub fn apply_batch(
     transcripts: &[Transcript],
 ) -> Result<(), AppError> {
     let mut candidate = document.clone();
-    for operation in operations {
-        apply_one(&mut candidate, operation, transcripts)?;
-    }
-    candidate.validate()?;
+    apply_batch_in_place(&mut candidate, operations, transcripts)?;
     *document = candidate;
+    Ok(())
+}
+
+/// Apply operations to a caller-owned staged document. This is intentionally
+/// crate-private: callers must discard the candidate if any operation fails.
+pub(crate) fn apply_batch_in_place(
+    document: &mut ProjectDocument,
+    operations: &[EditOp],
+    transcripts: &[Transcript],
+) -> Result<(), AppError> {
+    for operation in operations {
+        apply_one(document, operation, transcripts)?;
+    }
+    document.validate()?;
     Ok(())
 }
 #[cfg(test)]
@@ -1218,6 +1396,41 @@ mod tests {
         }
     }
 
+    fn document_with_owned_caption(
+        clip_id: &str,
+        caption_id: &str,
+    ) -> (ProjectDocument, String, String) {
+        let mut document = base_document();
+        let video_track_id = video_track(&document);
+        let text_track_id = document
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Text)
+            .expect("text track")
+            .id
+            .clone();
+        apply_batch(
+            &mut document,
+            &[
+                EditOp::InsertClip {
+                    clip: clip(
+                        clip_id,
+                        "10000000-0000-4000-8000-000000000001",
+                        &video_track_id,
+                        0,
+                        120,
+                    ),
+                },
+                EditOp::AddText {
+                    item: caption(caption_id, &text_track_id, clip_id, 20, 20, "owned caption"),
+                },
+            ],
+            &[],
+        )
+        .expect("owned caption fixture");
+        (document, video_track_id, text_track_id)
+    }
+
     #[test]
     fn split_and_ripple_remove_produce_expected_red_blue_timeline() {
         let mut document = base_document();
@@ -1325,6 +1538,316 @@ mod tests {
         let mut document = base_document();
         let before = document.clone();
         apply_batch(&mut document, &[], &[]).expect("empty batch");
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn move_clip_rejects_locked_owned_caption_atomically() {
+        let clip_id = "41000000-0000-4000-8000-000000000001";
+        let caption_id = "41000000-0000-4000-8000-000000000002";
+        let (mut document, video_track_id, text_track_id) =
+            document_with_owned_caption(clip_id, caption_id);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == text_track_id)
+            .expect("text track")
+            .locked = true;
+        let before = document.clone();
+
+        let error = apply_batch(
+            &mut document,
+            &[EditOp::MoveClip {
+                clip_id: clip_id.to_owned(),
+                track_id: video_track_id,
+                start_frame: 30,
+            }],
+            &[],
+        )
+        .expect_err("moving an owner must respect a locked caption track");
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("locked"));
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn move_clip_updates_unlocked_owned_caption_projection() {
+        let clip_id = "41000000-0000-4000-8000-000000000003";
+        let caption_id = "41000000-0000-4000-8000-000000000004";
+        let (mut document, video_track_id, _) = document_with_owned_caption(clip_id, caption_id);
+        let before_caption = document
+            .text_items
+            .iter()
+            .find(|text| text.id == caption_id)
+            .expect("caption")
+            .clone();
+
+        apply_batch(
+            &mut document,
+            &[EditOp::MoveClip {
+                clip_id: clip_id.to_owned(),
+                track_id: video_track_id,
+                start_frame: 30,
+            }],
+            &[],
+        )
+        .expect("moving an owner on an unlocked caption track");
+
+        let moved_clip = document
+            .clips
+            .iter()
+            .find(|clip| clip.id == clip_id)
+            .expect("moved clip");
+        assert_eq!(moved_clip.start_frame, 30);
+        assert_eq!(
+            document
+                .text_items
+                .iter()
+                .find(|text| text.id == caption_id)
+                .expect("caption after move"),
+            &before_caption
+        );
+        let projection = document
+            .projected_captions()
+            .expect("caption projection after move");
+        assert_eq!(
+            (
+                projection[0].caption_id.as_str(),
+                projection[0].timeline_start_frame,
+                projection[0].duration_frames,
+            ),
+            (caption_id, 50, 20)
+        );
+    }
+
+    #[test]
+    fn remove_clips_rejects_locked_owned_caption_atomically() {
+        let clip_id = "42000000-0000-4000-8000-000000000001";
+        let caption_id = "42000000-0000-4000-8000-000000000002";
+        let (mut document, _, text_track_id) = document_with_owned_caption(clip_id, caption_id);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == text_track_id)
+            .expect("text track")
+            .locked = true;
+        let before = document.clone();
+
+        let error = apply_batch(
+            &mut document,
+            &[EditOp::RemoveClips {
+                clip_ids: vec![clip_id.to_owned()],
+            }],
+            &[],
+        )
+        .expect_err("removing an owner must respect a locked caption track");
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("locked"));
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn remove_clips_removes_owned_caption_on_an_unlocked_track() {
+        let clip_id = "42000000-0000-4000-8000-000000000003";
+        let caption_id = "42000000-0000-4000-8000-000000000004";
+        let (mut document, _, _) = document_with_owned_caption(clip_id, caption_id);
+
+        apply_batch(
+            &mut document,
+            &[EditOp::RemoveClips {
+                clip_ids: vec![clip_id.to_owned()],
+            }],
+            &[],
+        )
+        .expect("removing an owner on an unlocked caption track");
+
+        assert!(!document.clips.iter().any(|clip| clip.id == clip_id));
+        assert!(!document.text_items.iter().any(|text| text.id == caption_id));
+    }
+
+    #[test]
+    fn remove_owner_track_rejects_locked_owned_caption_atomically() {
+        let clip_id = "43000000-0000-4000-8000-000000000001";
+        let caption_id = "43000000-0000-4000-8000-000000000002";
+        let (mut document, video_track_id, text_track_id) =
+            document_with_owned_caption(clip_id, caption_id);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == text_track_id)
+            .expect("text track")
+            .locked = true;
+        let before = document.clone();
+
+        let error = apply_batch(
+            &mut document,
+            &[EditOp::RemoveTrack {
+                track_id: video_track_id,
+                delete_items: true,
+            }],
+            &[],
+        )
+        .expect_err("removing an owner track must respect a locked caption track");
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("locked"));
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn remove_owner_track_removes_owned_caption_on_an_unlocked_track() {
+        let clip_id = "43000000-0000-4000-8000-000000000003";
+        let caption_id = "43000000-0000-4000-8000-000000000004";
+        let (mut document, video_track_id, _) = document_with_owned_caption(clip_id, caption_id);
+
+        apply_batch(
+            &mut document,
+            &[EditOp::RemoveTrack {
+                track_id: video_track_id.clone(),
+                delete_items: true,
+            }],
+            &[],
+        )
+        .expect("removing an owner track on an unlocked caption track");
+
+        assert!(!document
+            .tracks
+            .iter()
+            .any(|track| track.id == video_track_id));
+        assert!(!document.clips.iter().any(|clip| clip.id == clip_id));
+        assert!(!document.text_items.iter().any(|text| text.id == caption_id));
+    }
+
+    #[test]
+    fn non_timing_clip_update_allows_a_locked_owned_caption_track() {
+        let clip_id = "44000000-0000-4000-8000-000000000001";
+        let caption_id = "44000000-0000-4000-8000-000000000002";
+        let (mut document, _, text_track_id) = document_with_owned_caption(clip_id, caption_id);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == text_track_id)
+            .expect("text track")
+            .locked = true;
+        let before_caption = document
+            .text_items
+            .iter()
+            .find(|text| text.id == caption_id)
+            .expect("caption")
+            .clone();
+        let before_projection = document
+            .projected_captions()
+            .expect("caption projection before update");
+
+        apply_batch(
+            &mut document,
+            &[EditOp::UpdateClip {
+                clip_id: clip_id.to_owned(),
+                patch: ClipPatch {
+                    gain_db: Some(-6.0),
+                    ..Default::default()
+                },
+            }],
+            &[],
+        )
+        .expect("non-timing owner update");
+
+        assert_eq!(
+            document
+                .clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .expect("updated clip")
+                .gain_db,
+            -6.0
+        );
+        assert_eq!(
+            document
+                .text_items
+                .iter()
+                .find(|text| text.id == caption_id)
+                .expect("caption after update"),
+            &before_caption
+        );
+        assert_eq!(
+            document
+                .projected_captions()
+                .expect("caption projection after update"),
+            before_projection
+        );
+    }
+
+    #[test]
+    fn remove_range_allows_locked_caption_when_only_the_owner_tail_is_removed() {
+        let clip_id = "45000000-0000-4000-8000-000000000001";
+        let caption_id = "45000000-0000-4000-8000-000000000002";
+        let (mut document, _, text_track_id) = document_with_owned_caption(clip_id, caption_id);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == text_track_id)
+            .expect("text track")
+            .locked = true;
+
+        apply_batch(
+            &mut document,
+            &[EditOp::RemoveRange {
+                start_frame: 100,
+                end_frame: 120,
+                ripple: false,
+            }],
+            &[],
+        )
+        .expect("range leaves the locked caption projection unchanged");
+
+        let clip = document
+            .clips
+            .iter()
+            .find(|clip| clip.id == clip_id)
+            .expect("trimmed owner");
+        assert_eq!(clip.duration_frames, 100);
+        let projection = document
+            .projected_captions()
+            .expect("caption projection after range removal");
+        assert_eq!(
+            (
+                projection[0].caption_id.as_str(),
+                projection[0].timeline_start_frame,
+                projection[0].duration_frames,
+                projection[0].source_start_frame,
+            ),
+            (caption_id, 20, 20, 20)
+        );
+    }
+
+    #[test]
+    fn ripple_remove_rejects_locked_caption_when_owner_source_window_moves() {
+        let clip_id = "45000000-0000-4000-8000-000000000003";
+        let caption_id = "45000000-0000-4000-8000-000000000004";
+        let (mut document, _, text_track_id) = document_with_owned_caption(clip_id, caption_id);
+        document
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == text_track_id)
+            .expect("text track")
+            .locked = true;
+        let before = document.clone();
+
+        let error = apply_batch(
+            &mut document,
+            &[EditOp::RemoveRange {
+                start_frame: 0,
+                end_frame: 10,
+                ripple: true,
+            }],
+            &[],
+        )
+        .expect_err("ripple source shift must respect a locked caption track");
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("locked"));
         assert_eq!(document, before);
     }
 

@@ -134,7 +134,11 @@ export class VideoPool {
     const operations: Promise<void>[] = [];
     for (const mapping of mappings) {
       if (!Number.isFinite(mapping.sourceTimeSeconds) || mapping.sourceTimeSeconds < 0) continue;
+      const existing = this.entries.get(mapping.key);
+      if (existing?.active) continue;
       const entry = this.getOrCreate(mapping);
+      entry.active = false;
+      entry.playing = false;
       entry.lastUsed = nowMs();
       operations.push(this.loadMetadata(entry));
     }
@@ -175,7 +179,7 @@ export class VideoPool {
     const existing = this.entries.get(mapping.key);
     if (existing && existing.sourceIdentity === mapping.src) {
       const mappingChanged = existing.mapping.sourceTimeSeconds !== mapping.sourceTimeSeconds || existing.mapping.frame !== mapping.frame;
-      if (mappingChanged && !this.playing) {
+      if (mappingChanged && (!this.playing || !existing.active)) {
         existing.forceSeek = true;
         existing.needsCapture = true;
       }

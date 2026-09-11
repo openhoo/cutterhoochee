@@ -346,7 +346,7 @@ impl ExportRuntime {
             }
             return Err(AppError::new(
                 ErrorCode::PermissionDenied,
-                "Export destination overwrite was not approved",
+                "Writing the export destination was not approved",
             ));
         }
         let srt_allowed = if let Some(request) = srt_request.as_ref() {
@@ -741,8 +741,9 @@ fn execute_export(
         process,
         Some(expected_duration_ms),
         move |stdin| {
+            let mut rgba = Vec::new();
             for frame in 0..producer_plan.duration_frames {
-                let rgba = producer_renderer.render(frame)?;
+                producer_renderer.render_into(frame, &mut rgba)?;
                 stdin.write_all(&rgba).map_err(|_| {
                     AppError::new(
                         ErrorCode::JobCancelled,

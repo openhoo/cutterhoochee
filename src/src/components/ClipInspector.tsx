@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { AlignCenter, AudioLines, Captions, ChevronDown, Crop, Film, Lock, Plus, SlidersHorizontal, Trash2, Unlock } from "lucide-react";
 
 import type { ClipPatch, EditOp, EditorClient, MediaClip, ProjectSnapshot, TextItem, TimelineSelection, Track, Transition } from "@cutterhoochee/shared";
 import { Button } from "@/components/ui/button";
 import { formatTimecode, transitionRemovalOps } from "@/lib/native";
 
-export function ClipInspector({
+export const ClipInspector = memo(function ClipInspector({
   client: _client,
   snapshot,
   clip,
@@ -24,11 +24,14 @@ export function ClipInspector({
   onEdit: (label: string, operations: readonly EditOp[]) => Promise<void>;
   onNotice: (notice: string) => void;
 }) {
-  const selectedText = snapshot.document.textItems.find((item) => selection.textIds.includes(item.id));
+  const selectedText = useMemo(() => {
+    const selectedTextIds = new Set(selection.textIds);
+    return snapshot.document.textItems.find((item) => selectedTextIds.has(item.id));
+  }, [selection.textIds, snapshot.document.textItems]);
   if (selectedText) return <TextInspector snapshot={snapshot} item={selectedText} onEdit={onEdit} onNotice={onNotice} />;
   if (!clip) return <EmptyInspector />;
   return <ClipFields snapshot={snapshot} clip={clip} track={track} transitions={transitions} onEdit={onEdit} onNotice={onNotice} />;
-}
+});
 
 function EmptyInspector() {
   return <div className="empty-panel inspector-empty"><SlidersHorizontal aria-hidden="true" /><strong>Nothing selected</strong><span>Select a clip, title, or caption to edit its timing and properties.</span></div>;
@@ -65,6 +68,7 @@ function ClipFields({ snapshot, clip, track, transitions, onEdit, onNotice }: { 
   }, [clip.id, clip.startFrame, clip.inFrame, clip.durationFrames, clip.scale, clip.opacity, clip.gainDb, clip.centerX, clip.centerY, clip.fit, clip.audioEnabled, clip.fadeInFrames, clip.fadeOutFrames]);
 
   const sourceAsset = snapshot.document.assets.find((asset) => asset.id === clip.assetId);
+  const isVideoTrack = track?.kind === "video";
   const nextClip = useMemo(() => snapshot.document.clips.filter((candidate) => candidate.trackId === clip.trackId && candidate.id !== clip.id).sort((a, b) => a.startFrame - b.startFrame).find((candidate) => candidate.startFrame >= clip.startFrame + clip.durationFrames), [clip, snapshot.document.clips]);
   const commitPatch = async (patch: ClipPatch) => {
     try {
@@ -114,9 +118,9 @@ function ClipFields({ snapshot, clip, track, transitions, onEdit, onNotice }: { 
   return <div className="panel-stack inspector-panel">
     <div className="panel-heading"><div><p className="eyebrow">Inspector</p><h2>{sourceAsset?.original.fileName ?? "Clip"}</h2></div><Film aria-hidden="true" className="panel-heading-icon" /></div>
     <div className="inspector-section"><div className="section-label"><span>Timing</span><span className="section-hint">{formatTimecode(clip.startFrame, snapshot.document.profile.fpsNum, snapshot.document.profile.fpsDen)}</span></div><div className="field-row"><NumberField label="Start" value={startFrame} onChange={setStartFrame} /><NumberField label="Source in" value={inFrame} onChange={setInFrame} /><NumberField label="Duration" value={durationFrames} onChange={setDurationFrames} /></div><Button variant="secondary" size="sm" onClick={() => void commitTrim()}>Apply timing</Button></div>
-    <div className="inspector-section"><div className="section-label"><span>Canvas</span><Crop aria-hidden="true" /></div><label className="field-group"><span className="field-label">Fit</span><select value={fit} onChange={(event) => { const nextFit = event.target.value as typeof fit; setFit(nextFit); void commitPatch({ fit: nextFit }); }}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><div className="field-row"><NumberField label="X · bp" value={centerX} min={0} max={10000} onChange={(value) => { setCenterX(value); }} onBlur={() => void commitPatch({ centerX: parseFrame(centerX) ?? clip.centerX })} /><NumberField label="Y · bp" value={centerY} min={0} max={10000} onChange={setCenterY} onBlur={() => void commitPatch({ centerY: parseFrame(centerY) ?? clip.centerY })} /></div><NumberField label="Scale · bp" value={scale} min={100} max={40000} onChange={setScale} onBlur={() => void commitPatch({ scale: parseFrame(scale) ?? clip.scale })} /><NumberField label="Opacity · bp" value={opacity} min={0} max={10000} onChange={setOpacity} onBlur={() => void commitPatch({ opacity: parseFrame(opacity) ?? clip.opacity })} /></div>
+    {isVideoTrack ? <div className="inspector-section"><div className="section-label"><span>Canvas</span><Crop aria-hidden="true" /></div><label className="field-group"><span className="field-label">Fit</span><select value={fit} onChange={(event) => { const nextFit = event.target.value as typeof fit; setFit(nextFit); void commitPatch({ fit: nextFit }); }}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><div className="field-row"><NumberField label="X · bp" value={centerX} min={0} max={10000} onChange={(value) => { setCenterX(value); }} onBlur={() => void commitPatch({ centerX: parseFrame(centerX) ?? clip.centerX })} /><NumberField label="Y · bp" value={centerY} min={0} max={10000} onChange={setCenterY} onBlur={() => void commitPatch({ centerY: parseFrame(centerY) ?? clip.centerY })} /></div><NumberField label="Scale · bp" value={scale} min={100} max={40000} onChange={setScale} onBlur={() => void commitPatch({ scale: parseFrame(scale) ?? clip.scale })} /><NumberField label="Opacity · bp" value={opacity} min={0} max={10000} onChange={setOpacity} onBlur={() => void commitPatch({ opacity: parseFrame(opacity) ?? clip.opacity })} /></div> : null}
     <div className="inspector-section"><div className="section-label"><span>Audio</span><AudioLines aria-hidden="true" /></div><label className="toggle-row"><span>Clip audio</span><input type="checkbox" checked={audioEnabled} onChange={(event) => { const checked = event.target.checked; setAudioEnabled(checked); void commitPatch({ audioEnabled: checked }); }} /></label><NumberField label="Gain · dB" value={gainDb} min={-60} max={12} step="0.1" onChange={setGainDb} onBlur={() => { const parsed = Number(gainDb); if (Number.isFinite(parsed)) void commitPatch({ gainDb: parsed }); }} /><div className="field-row"><NumberField label="Fade in" value={fadeInFrames} min={0} onChange={setFadeInFrames} onBlur={() => void commitPatch({ fadeInFrames: parseFrame(fadeInFrames) ?? clip.fadeInFrames })} /><NumberField label="Fade out" value={fadeOutFrames} min={0} onChange={setFadeOutFrames} onBlur={() => void commitPatch({ fadeOutFrames: parseFrame(fadeOutFrames) ?? clip.fadeOutFrames })} /></div></div>
-    <div className="inspector-section"><div className="section-label"><span>Transitions</span><ChevronDown aria-hidden="true" /></div>{transitions.length > 0 ? transitions.map((transition) => <div className="transition-row" key={transition.id}><span>Dissolve · {transition.durationFrames}f</span><Button variant="ghost" size="icon" aria-label="Remove dissolve" onClick={() => void removeTransition(transition)}><Trash2 aria-hidden="true" /></Button></div>) : <p className="small-note">No explicit dissolve on this clip.</p>}{nextClip ? <div className="transition-add"><NumberField label="Frames" value={transitionDuration} min={2} onChange={setTransitionDuration} /><Button variant="secondary" size="sm" onClick={() => void addTransition()}><Plus aria-hidden="true" />Dissolve next</Button></div> : null}</div>
+    {isVideoTrack ? <div className="inspector-section"><div className="section-label"><span>Transitions</span><ChevronDown aria-hidden="true" /></div>{transitions.length > 0 ? transitions.map((transition) => <div className="transition-row" key={transition.id}><span>Dissolve · {transition.durationFrames}f</span><Button variant="ghost" size="icon" aria-label="Remove dissolve" onClick={() => void removeTransition(transition)}><Trash2 aria-hidden="true" /></Button></div>) : <p className="small-note">No explicit dissolve on this clip.</p>}{nextClip ? <div className="transition-add"><NumberField label="Frames" value={transitionDuration} min={2} onChange={setTransitionDuration} /><Button variant="secondary" size="sm" onClick={() => void addTransition()}><Plus aria-hidden="true" />Dissolve next</Button></div> : null}</div> : null}
     {track ? <div className="inspector-section"><div className="section-label"><span>Track</span>{track.locked ? <Lock aria-hidden="true" /> : <Unlock aria-hidden="true" />}</div><p className="small-note">{track.name} · {track.locked ? "Locked" : track.muted ? "Muted" : "Active"}</p></div> : null}
   </div>;
 }

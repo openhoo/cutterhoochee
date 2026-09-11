@@ -254,7 +254,7 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <h3 id="66-mute-and-lock-tracks">6.6 Mute and lock tracks</h3>
 <p>Each track row has two icon buttons:</p>
 <ul>
-<li><strong>Mute</strong>/<strong>Unmute</strong> changes the stored track status. <strong>Current limitation: the render plan does not use this status, so it must not be relied on to silence preview or exported audio.</strong></li>
+<li><strong>Mute</strong>/<strong>Unmute</strong> toggles whether that track contributes audio in preview and export. On a video track, muting silences the track's audio while its video remains visible.</li>
 <li><strong>Lock</strong>/<strong>Unlock</strong> prevents timing/content edits that would touch the track.</li>
 </ul>
 <p>Use <strong>Lock</strong> before inspecting a multi-track section to avoid moving it accidentally. A locked track is an editing constraint, not a permanent protection boundary: unlock it only when you intentionally need to edit it.</p>
@@ -277,19 +277,20 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <p>The corner label reports the project dimensions and either <strong>Auto</strong> or <strong>Software</strong>. A <code>buffering</code> overlay means the engine is obtaining the required frame/audio window. An error overlay offers <strong>Retry preview</strong>. If video decoding remains unavailable, use <strong>Software</strong>, retry after normalization, and inspect the notice for a source-specific error. Do not infer that a successful software preview means the source is accepted by every external player.</p>
 <h3 id="73-audio-clock-and-waveform">7.3 Audio clock and waveform</h3>
 <p>Application audio is normalized to 48 kHz, stereo PCM and scheduled on the native project sample grid. Browser/device output may use a different hardware rate, but project sample coordinates remain 48 kHz. The timeline waveform is a bounded peak summary of normalized PCM; it is a visual aid, not an audio export substitute.</p>
-<p>The preview’s volume icon is an indicator, not a user volume slider. Change clip level using <strong>Gain · dB</strong> in <strong>Inspector</strong>. Clearing <strong>Clip audio</strong> excludes audio from a <strong>video-track clip</strong>. The current render plan ignores track <strong>Mute</strong> and does not exclude audio-track clips when their <strong>Clip audio</strong> checkbox is cleared. Do not use those ineffective states as a guarantee of silence. If unwanted audio must be excluded, remove its audio-track clip from a deliberately backed-up working copy and inspect the final export.</p>
+<p>The preview’s volume icon is an indicator, not a user volume slider. Change clip level using <strong>Gain · dB</strong> in <strong>Inspector</strong>. Clearing <strong>Clip audio</strong> excludes audio from the selected video- or audio-track clip. <strong>Mute</strong> excludes audio from the muted track in preview and export; muting a video track leaves its video visible. Use these controls to shape the mix, then inspect the final export.</p>
 <h3 id="74-audio-gaps-and-mixed-tracks">7.4 Audio gaps and mixed tracks</h3>
 <p>The render plan includes audio segments and intentional silence where no enabled clip contributes. Video-only assets can therefore play without an audio stream, while export still produces an audio stream for the final MP4. If audio is missing, check:</p>
 <ol>
 <li>The clip has normalized audio (an audio waveform can be generated).</li>
-<li>For a video-track clip, <strong>Clip audio</strong> is enabled if its sound is wanted.</li>
-<li>Do not use track <strong>Mute</strong> or an audio-track clip’s <strong>Clip audio</strong> checkbox to infer what the current renderer will play.</li>
+<li>For the video- or audio-track clip, <strong>Clip audio</strong> is enabled when its sound is wanted.</li>
+<li>The containing track is not muted. Muting a video track removes only its audio; its video remains visible.</li>
 <li><strong>Gain · dB</strong> is not set below the audible range.</li>
 <li>The playhead is inside the clip’s timeline interval.</li>
 </ol>
 <h2 id="8-inspector-text-and-transitions">8. Inspector, text, and transitions</h2>
 <h3 id="81-open-the-inspector">8.1 Open the Inspector</h3>
 <p>Select a media clip or text item, then choose the <strong>Inspector</strong> tab. With nothing selected, the panel says <strong>Nothing selected</strong> and instructs you to select a clip, title, or caption.</p>
+<p>Inspector groups follow the selected track type: <strong>Canvas</strong> and <strong>Transitions</strong> apply to video-track clips, while <strong>Audio</strong> applies to both video-track and audio-track clips.</p>
 <p><img loading="lazy" decoding="async" src="assets/clip-inspector.png" alt="Inspector tab with a selected video clip and timing, canvas, audio, and transition fields."></p>
 <p><em>Figure 9 — <strong>Inspector</strong> capture for the selected generated <code>long-numbered.mp4</code> clip. Only the fields visible in the capture are described here; the test-pattern media is not user footage.</em></p>
 <h3 id="82-clip-timing">8.2 Clip timing</h3>
@@ -303,7 +304,7 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <p>Values must be non-negative whole frames, and <strong>Duration</strong> must be positive. The native operation validates the source range, project range, track, and any transition relationship. If a timing change would invalidate an explicit dissolve, the UI removes the existing dissolve in the same edit before applying the trim; review the result rather than assuming the dissolve remains.</p>
 <p><strong>Destructive-edit caution:</strong> Applying timing can remove source content or change which source frames captions refer to. Use <strong>Undo</strong> immediately if the resulting preview is not what you intended.</p>
 <h3 id="83-canvas-and-visual-properties">8.3 Canvas and visual properties</h3>
-<p>The <strong>Canvas</strong> section provides:</p>
+<p>For a selected video-track clip, the <strong>Canvas</strong> section provides:</p>
 <ul>
 <li><strong>Fit</strong> — <strong>Contain</strong> or <strong>Cover</strong>.</li>
 <li><strong>X · bp</strong> and <strong>Y · bp</strong> — base-point positions from <code>0</code> to <code>10000</code>; <code>5000</code> is the centered coordinate.</li>
@@ -312,9 +313,9 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 </ul>
 <p>The values are normalized project coordinates rather than CSS pixels. Use small deliberate changes and confirm the canvas after each blur/commit. A field can commit on blur, while <strong>Apply timing</strong> commits the timing group explicitly.</p>
 <h3 id="84-clip-audio-properties">8.4 Clip audio properties</h3>
-<p>The <strong>Audio</strong> section provides:</p>
+<p>For a selected video-track or audio-track clip, the <strong>Audio</strong> section provides:</p>
 <ul>
-<li><strong>Clip audio</strong> checkbox. It excludes audio from video-track clips; it currently does not exclude audio-track clips from the render plan.</li>
+<li><strong>Clip audio</strong> checkbox. It excludes audio from both video-track and audio-track clips.</li>
 <li><strong>Gain · dB</strong>, bounded by the current native validation range (the control exposes a practical range of <code>-60</code> to <code>12</code> dB and accepts decimal steps).</li>
 <li><strong>Fade in</strong> and <strong>Fade out</strong> in whole frames.</li>
 </ul>
@@ -332,7 +333,7 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 <h3 id="86-captions-and-text-items">8.6 Captions and text items</h3>
 <p>Caption items are also editable text items, shown on the text track with a <code>CC</code> marker. Select a caption to edit its text/style and placement in <strong>Inspector</strong>. Caption timing may be owned by a source clip; moving, splitting, trimming, or removing that clip projects the owned caption range with the retained source interval. Keep the text track unlocked for operations that need to move or split those captions. Editing a caption changes the editable project item, not the transcript evidence; it does not rewrite the stored transcript. The current UI has no direct drag/timing control for text or captions.</p>
 <h3 id="87-dissolves">8.7 Dissolves</h3>
-<p>A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:</p>
+<p>The <strong>Transitions</strong> section is available for video-track clips. A dissolve is an explicit transition between two adjacent clips on the same video track. To add one:</p>
 <ol>
 <li>Select the left clip.</li>
 <li>Confirm that a next clip exists on the same video track and will follow it.</li>
@@ -500,7 +501,7 @@ Let us begin.
 <li>Save the project with <strong>Ctrl/Cmd+S</strong>.</li>
 <li>Review the current revision number in the top bar/status and inspect the complete timeline and preview.</li>
 <li>Confirm that all assets are normalized and no card says <strong>Media preparation is incomplete.</strong></li>
-<li>Check captions, actual audio output, clip gain/fades, and transition overlaps. Do not rely on track <strong>Mute</strong> or an audio-track clip’s <strong>Clip audio</strong> state to silence output in the current build.</li>
+<li>Check captions, actual audio output, clip gain/fades, track mute state, and transition overlaps. <strong>Mute</strong> silences that track's audio in preview and export (video remains visible when its track is muted), and <strong>Clip audio</strong> controls audio on both video-track and audio-track clips.</li>
 <li>Click <strong>Export</strong> or press <code>Ctrl/Cmd+E</code>.</li>
 </ol>
 <p>The <strong>Export video</strong> dialog captures the selected current revision. Its message explicitly says the export will not change if you continue editing. Edits made after export starts do not mutate the captured render plan; they become a later project revision.</p>
@@ -653,7 +654,7 @@ Let us begin.
 <li>Select the matching video clip in the timeline and click <strong>Apply captions</strong>. Review each <code>CC</code> block in <strong>Timeline</strong>. Reapplying later will replace all captions owned by this clip, so finish any transcript-derived caption edits after the last application.</li>
 <li>Return to <strong>Media</strong> or use <strong>Add title</strong> at the current playhead. Select the title block, edit <strong>Text</strong>, and adjust <strong>Style</strong>, size, and positions in <strong>Inspector</strong>.</li>
 <li>Select the first clip, identify the next clip, and use <strong>Transitions</strong> → <strong>Frames</strong> → <strong>Dissolve next</strong> to add a short dissolve only if both clips are long enough. Preview the overlap.</li>
-<li>Use <strong>Gain · dB</strong>, <strong>Fade in</strong>, and <strong>Fade out</strong> to balance audio. <strong>Clip audio</strong> can exclude the video clip’s own sound. Do not rely on track <strong>Mute</strong> or an audio-track clip’s checkbox for silence; check audible output.</li>
+<li>Use <strong>Gain · dB</strong>, <strong>Fade in</strong>, and <strong>Fade out</strong> to balance audio. <strong>Clip audio</strong> can exclude audio from the selected video- or audio-track clip. <strong>Mute</strong> silences a track's audio in preview/export; muting a video track leaves its video visible.</li>
 <li>Save with <code>Ctrl/Cmd+S</code>. Wait for <strong>Saved locally</strong>.</li>
 <li>Click <strong>Export</strong>. Choose <code>1080p</code> for a full-size portrait deliverable, check <strong>SRT caption sidecar</strong> if a separate subtitle file is wanted, and start the export.</li>
 <li>Choose the MP4 destination. Review and answer its mandatory <strong>Allow once</strong> request and the separate SRT request if enabled; inspect existing-file overwrite details for each.</li>
@@ -707,7 +708,7 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 </ol>
 <p>Software preview is a diagnostic/preview fallback, not a promise of hardware acceleration or full-resolution playback.</p>
 <h3 id="preview-plays-video-but-no-sound-is-audible">Preview plays video but no sound is audible</h3>
-<p>Check video-clip <strong>Clip audio</strong>, <strong>Gain · dB</strong>, fades, and the playhead interval. Track <strong>Mute/Unmute</strong> is currently stored state only; an audio-track clip’s <strong>Clip audio</strong> checkbox also does not exclude its sound from the render plan. Neither is a reliable playback/export mute. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.</p>
+<p>Check the selected clip’s <strong>Clip audio</strong>, <strong>Gain · dB</strong>, fades, the containing track’s <strong>Mute</strong> state, and the playhead interval. <strong>Clip audio</strong> applies to both video-track and audio-track clips. <strong>Mute/Unmute</strong> silences or restores a track’s audio in preview and export; muting a video track leaves its video visible. A waveform may be unavailable even when audio is valid, so inspect the notice and listen to the preview and final output. If the source has no audio stream, use a separate normalized audio clip.</p>
 <h3 id="split-says-the-playhead-is-outside-the-clip">Split says the playhead is outside the clip</h3>
 <p>Move the playhead strictly between the clip’s first and last frame. The first and last boundaries are not valid split positions. If an explicit dissolve touches the clip, use <strong>Remove dissolve</strong>, split, and add a new valid transition afterward.</p>
 <h3 id="range-removal-changed-more-tracks-than-intended">Range removal changed more tracks than intended</h3>
@@ -795,7 +796,7 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 <li>Pi can request editor and external operations, but AI output is not a substitute for revision review. External effects approved through permissions are not reversed by timeline Undo.</li>
 <li>Preview <strong>Software</strong> mode is a bounded fallback for display; it is not an export-quality guarantee.</li>
 <li>The current UI exposes same-track clip movement and insertion; do not assume arbitrary cross-track drag-and-drop, arbitrary track creation, or hidden project-profile conversion controls.</li>
-<li>Track <strong>Mute</strong> is not consumed by the current render plan. <strong>Clip audio</strong> excludes video-track clip audio but does not exclude audio-track clips. These limitations can affect exported audio; do not mistake a stored muted/disabled state for guaranteed silence.</li>
+<li>Track <strong>Mute</strong> silences that track’s audio in preview and export; muting a video track leaves its video visible. <strong>Clip audio</strong> disables audio on both video-track and audio-track clips.</li>
 </ul>
 <h3 id="162-glossary">16.2 Glossary</h3>
 <p><strong>AppImage</strong> — A self-contained Linux application package used by the exercised Cutterhoochee build.</p>
@@ -818,6 +819,6 @@ Do not change Main Audio or captions. Stop after the edit so I can review the ne
 <p><strong>Ripple range removal</strong> — <code>Shift+Delete</code> on a selected ruler range. It removes the range and shifts later timeline content while projecting affected clips/text/captions.</p>
 <p><strong>SRT</strong> — SubRip Subtitle text format. Cutterhoochee can import SRT cues as editable captions and can optionally export a sidecar beside the MP4.</p>
 <p><strong>Source in</strong> — The first source frame used by a clip. Changing it changes which normalized source frames appear without necessarily changing the clip’s timeline start.</p>
-<p><strong>Track</strong> — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; the current mute-state rendering limitation is described above.</p>
+<p><strong>Track</strong> — A timeline row containing video, audio, or text items. Tracks have lock and mute controls; <strong>Mute</strong> controls whether that track contributes audio to preview/export, while video remains visible when a video track is muted.</p>
 <p><strong>Workspace</strong> — The app-owned authority scope that binds a project, managed artifacts, credentials/permissions, and native runtime state. Workspace authority is not copied into the portable project JSON.</p>
 </main><footer>Readable offline. Markdown is the editable source. GIFs are silent workflow examples, not performance measurements.</footer></body></html>

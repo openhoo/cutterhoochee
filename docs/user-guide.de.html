@@ -256,7 +256,7 @@
 <h3 id="spuren-auswahl-und-playhead">Spuren, Auswahl und Playhead</h3>
 <p>Eine neue Projektdefinition enthält die Spuren <code>Main Video</code>, <code>Main Audio</code> und <code>Text</code>. Weitere sichtbare Spurennamen können aus dem jeweiligen Projekt stammen. Jede Spur hat eine eigene Zeile und eigene Schalter:</p>
 <ul>
-<li><code>Mute</code> beziehungsweise <code>Unmute</code> ändert den gespeicherten Spurstatus. <strong>Aktuelle Einschränkung: Dieser Status wird im Renderplan nicht ausgewertet und ist daher keine verlässliche Stummschaltung für Vorschau oder Export.</strong></li>
+<li><code>Mute</code> beziehungsweise <code>Unmute</code> schaltet den Audiobeitrag der Spur für Vorschau und Export ein oder aus. Bei einer Videospur bleibt das Bild sichtbar; nur ihr Ton wird stummgeschaltet.</li>
 <li><code>Lock</code> beziehungsweise <code>Unlock</code> schützt die Spur vor Bearbeitung.</li>
 <li>Der Status zeigt <code>Locked</code>, <code>Muted</code> oder <code>Active</code>.</li>
 </ul>
@@ -302,7 +302,7 @@
 </ol>
 <p><code>Start</code> ist die Timeline-Position, <code>Source in</code> der Quellenbeginn, <code>Duration</code> die Clipdauer. Der Quellenbereich muss innerhalb der normalisierten Asset-Grenzen bleiben. Ein Trim kann einen betroffenen expliziten Dissolve entfernen; prüfen Sie die Transition-Anzeige anschließend.</p>
 <h3 id="audiospuren-und-sperren">Audiospuren und Sperren</h3>
-<p><code>Lock</code> schützt die Spur vor Bearbeitung. Verlassen Sie sich für Vorschau oder Export nicht auf <code>Mute</code>: Der aktuelle Renderplan berücksichtigt diesen Spurstatus nicht. Für Video-Ton können Sie <code>Clip audio</code> am Videoclip deaktivieren. Bei reinen Audioclips wird auch deren <code>Clip audio</code>-Schalter derzeit nicht zum Ausschluss aus dem Renderplan verwendet; entfernen Sie einen nicht benötigten Audioclip aus einer bewusst gesicherten Arbeitskopie und prüfen Sie den Export.</p>
+<p><code>Lock</code> schützt die Spur vor Bearbeitung. <code>Mute</code> schaltet den Audiobeitrag der gesamten Spur in Vorschau und Export stumm; bei einer stummgeschalteten Videospur bleibt das Bild sichtbar. Mit <code>Clip audio</code> deaktivieren Sie den Ton des ausgewählten Video- oder Audioclips.</p>
 <hr>
 <h2 id="7-vorschau-und-audio">7. Vorschau und Audio</h2>
 <h3 id="native-vorschau-bedienen">Native Vorschau bedienen</h3>
@@ -329,16 +329,17 @@
 <p>Für einen einzelnen Clip:</p>
 <ol>
 <li>Wählen Sie den Clip und öffnen Sie <code>Inspector</code>.</li>
-<li>Für den Ton eines Videoclips können Sie im Abschnitt <code>Audio</code> <code>Clip audio</code> aktivieren oder deaktivieren. Bei Clips auf Audiospuren ist dieser Schalter derzeit kein wirksamer Audioausschluss.</li>
+<li>Für den Ton eines Video- oder Audioclips können Sie im Abschnitt <code>Audio</code> <code>Clip audio</code> aktivieren oder deaktivieren.</li>
 <li>Ändern Sie <code>Gain · dB</code> innerhalb des unterstützten Bereichs <code>-60</code> bis <code>12</code> dB.</li>
 <li>Setzen Sie <code>Fade in</code> und <code>Fade out</code> als Frameanzahl.</li>
 <li>Spielen Sie den betroffenen Bereich erneut ab.</li>
 </ol>
-<p>Der Schalter <code>Clip audio</code> ist für Videoclip-Ton wirksam. Bei Clips auf Audiospuren und beim Spurstatus <code>Mute</code> besteht die oben beschriebene Render-Einschränkung. <code>Gain · dB</code> und Fades beeinflussen den Pegel, sind aber kein Ersatz für einen garantierten Audioausschluss. Prüfen Sie die fertige Ausgabe hörbar.</p>
+<p>Der Schalter <code>Clip audio</code> gilt für Video- und Audioclips. <code>Mute</code> schaltet den Audiobeitrag der gesamten Spur in Vorschau und Export stumm; bei einer stummgeschalteten Videospur bleibt das Bild sichtbar. <code>Gain · dB</code> und Fades beeinflussen den Pegel. Prüfen Sie die fertige Ausgabe hörbar.</p>
 <hr>
 <h2 id="8-inspector-text-und-übergänge">8. Inspector, Text und Übergänge</h2>
 <h3 id="clip-inspector">Clip-Inspector</h3>
 <p>Wählen Sie einen Videoclip, Audioclip oder Bildclip und öffnen Sie den Tab <code>Inspector</code>. Die verfügbaren Gruppen sind:</p>
+<p>Die verfügbaren Gruppen hängen vom Spurtyp ab: <code>Canvas</code> und <code>Transitions</code> gelten für Clips auf Videospuren; <code>Audio</code> gilt für Clips auf Video- und Audiospuren.</p>
 <h4 id="timing"><code>Timing</code></h4>
 <ul>
 <li><code>Start</code>: Timeline-Start in Frames.</li>
@@ -348,6 +349,7 @@
 </ul>
 <p><code>Start</code> und <code>Source in</code> sind nichtnegative ganze Frames; <code>Duration</code> muss mindestens einen Frame betragen. Ein Clip darf die vorbereitete Quelle nicht überlaufen.</p>
 <h4 id="canvas"><code>Canvas</code></h4>
+<p>Bei einem Clip auf einer Videospur bietet der Abschnitt <code>Canvas</code>:</p>
 <ul>
 <li><code>Fit</code>: <code>Contain</code> bewahrt den gesamten Inhalt innerhalb des Canvas; <code>Cover</code> füllt den Canvas und kann Bildbereiche abschneiden.</li>
 <li><code>X · bp</code> und <code>Y · bp</code>: Mittelpunktposition in Basispunkten von <code>0</code> bis <code>10000</code>; <code>5000</code> liegt jeweils in der Mitte der Projektfläche.</li>
@@ -356,13 +358,15 @@
 </ul>
 <p>Bearbeiten Sie Positionen mit Bedacht, besonders bei <code>Portrait · 9:16</code>: Eine im Querformat gut sichtbare Position kann im Hochformat außerhalb des sicheren sichtbaren Bereichs liegen.</p>
 <h4 id="audio"><code>Audio</code></h4>
+<p>Bei einem Clip auf einer Video- oder Audiospur bietet der Abschnitt <code>Audio</code>:</p>
 <ul>
-<li><code>Clip audio</code>: Video-Ton an- oder ausschalten; bei Clips auf Audiospuren wird dieser Schalter derzeit nicht als Audioausschluss ausgewertet.</li>
+<li><code>Clip audio</code>: Ton des ausgewählten Video- oder Audioclips an- oder ausschalten.</li>
 <li><code>Gain · dB</code>: Clipverstärkung beziehungsweise -absenkung.</li>
 <li><code>Fade in</code> und <code>Fade out</code>: Ein-/Ausblenddauer in Frames.</li>
 </ul>
 <p>Standbilder und Videos ohne Audiostream können kein Clip-Audio aktivieren.</p>
 <h4 id="transitions"><code>Transitions</code></h4>
+<p>Der Abschnitt <code>Transitions</code> steht für Clips auf Videospuren zur Verfügung.</p>
 <p>Cutterhoochee stellt den verifizierten Übergang <code>Dissolve</code> bereit. Er verbindet zwei aufeinanderfolgende Clips einer Videospur. Die Dauer muss mindestens zwei Frames betragen und kürzer als die Dauer beider beteiligten Clips sein.</p>
 <ul>
 <li>Wenn ein Übergang vorhanden ist, erscheint <code>Dissolve · Nf</code> und <code>Remove dissolve</code>.</li>
@@ -711,7 +715,7 @@ Los geht es.
 <li>Fügen Sie das Audioasset auf <code>Main Audio</code> ein.</li>
 <li>Spielen Sie einen kurzen Bereich ab und kontrollieren Sie in <code>Inspector</code>, ob <code>Clip audio</code> beim Videoclip wie gewünscht aktiv ist.</li>
 </ol>
-<p>Wenn Ihr Video bereits passenden Ton enthält, vermeiden Sie eine doppelte Tonspur: Deaktivieren Sie <code>Clip audio</code> am Videoclip, wenn die separate Audiospur verwendet werden soll. Verlassen Sie sich nicht auf Spur-<code>Mute</code> oder den <code>Clip audio</code>-Schalter eines reinen Audioclips; diese Zustände werden im aktuellen Renderplan nicht als Stummschaltung berücksichtigt.</p>
+<p>Wenn Ihr Video bereits passenden Ton enthält, vermeiden Sie eine doppelte Tonspur: Deaktivieren Sie <code>Clip audio</code> am Videoclip, wenn die separate Audiospur verwendet werden soll. <code>Mute</code> schaltet den Audiobeitrag einer Spur in Vorschau und Export stumm; bei einer stummgeschalteten Videospur bleibt das Bild sichtbar. <code>Clip audio</code> funktioniert ebenso für den Ton eines reinen Audioclips.</p>
 <h3 id="133-schnitt-und-gestaltung">13.3 Schnitt und Gestaltung</h3>
 <ol>
 <li>Setzen Sie den Playhead in die Mitte des Videoclips.</li>
@@ -826,8 +830,8 @@ Los geht es.
 <h3 id="falsche-audioausgabe-oder-kein-ton">Falsche Audioausgabe oder kein Ton</h3>
 <p>Prüfen Sie in dieser Reihenfolge:</p>
 <ol>
-<li>Verlassen Sie sich nicht auf <code>Mute</code> als Audio-Prüfschalter: Der aktuelle Renderplan ignoriert diesen Spurstatus.</li>
-<li>Ist <code>Clip audio</code> beim Videoclip eingeschaltet, falls dessen Ton gewünscht ist? Der gleichnamige Schalter auf reinen Audioclips schließt deren Ton derzeit nicht aus.</li>
+<li>Prüfen Sie, ob die betreffende Spur stummgeschaltet ist. <code>Mute</code> schaltet ihren Audiobeitrag in Vorschau und Export stumm; bei einer Videospur bleibt das Bild sichtbar.</li>
+<li>Ist <code>Clip audio</code> beim Video- oder Audioclip eingeschaltet, falls dessen Ton gewünscht ist?</li>
 <li>Liegt <code>Gain · dB</code> nicht auf einer ungewollten Absenkung?</li>
 <li>Sind <code>Fade in</code>/<code>Fade out</code> länger als der hörbare Teil?</li>
 <li>Ist im Projekt ein Audioasset mit normalisiertem Audio vorhanden?</li>
@@ -921,7 +925,7 @@ Los geht es.
 <li><strong>Medienformate:</strong> Der native Import ist auf eine Allowlist von Demuxern/Protokollen und die tatsächlich vorhandenen decodierbaren Streams begrenzt.</li>
 <li><strong>Projektprofile:</strong> Die Startoberfläche bietet 16:9, 9:16 und 1:1 sowie 24, 25, 30 und 60 fps (die zusätzlichen Frameraten erscheinen unter <code>Advanced format options</code>).</li>
 <li><strong>Audio:</strong> Normalisiertes Audio ist für die lokale Transkription erforderlich; Standbilder besitzen kein Clip-Audio.</li>
-<li><strong>Stummschaltung:</strong> Track-<code>Mute</code> wird derzeit nicht im Renderplan ausgewertet. <code>Clip audio</code> deaktiviert Video-Ton, schließt jedoch Ton von Clips auf Audiospuren nicht aus. Verlassen Sie sich für eine stumme Ausgabe nicht auf diese unwirksamen Zustände; prüfen Sie den finalen Export.</li>
+<li><strong>Stummschaltung:</strong> Track-<code>Mute</code> schaltet den Audiobeitrag dieser Spur in Vorschau und Export stumm; bei einer Videospur bleibt das Bild sichtbar. <code>Clip audio</code> deaktiviert den Ton sowohl von Video- als auch von Audioclips.</li>
 <li><strong>Übergänge:</strong> Der verifizierte Übergang ist <code>Dissolve</code> auf Videospuren mit zwei passenden Clips. Vor dem Split muss er entfernt werden.</li>
 <li><strong>Untertitel:</strong> Transcript-Captions und SRT-Import sind verfügbar; SRT muss UTF-8, &lt;= 5 MiB und strikt nicht überlappend sein.</li>
 <li><strong>Sprachmodell:</strong> Lokale automatische Transkription benötigt einen einwilligungsgebundenen Download des mehrsprachigen Modells. Ohne diesen Download bleiben SRT-Import, Bearbeitung importierter Captions und manuelle Titel verfügbar.</li>

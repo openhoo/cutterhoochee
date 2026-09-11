@@ -2,7 +2,9 @@ use crate::editor::history::{HistoryState, Receipt};
 use crate::error::AppError;
 use crate::ipc::{validate_safe_integer, MAX_SAFE_INTEGER};
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -1014,16 +1016,20 @@ impl TextItem {
         }))
     }
 
-    pub fn validate(
+    pub fn validate<TrackId, ClipId>(
         &self,
-        tracks: &HashMap<String, &Track>,
-        clips: &HashMap<String, &MediaClip>,
-    ) -> Result<(), AppError> {
+        tracks: &HashMap<TrackId, &Track>,
+        clips: &HashMap<ClipId, &MediaClip>,
+    ) -> Result<(), AppError>
+    where
+        TrackId: Borrow<str> + Eq + Hash,
+        ClipId: Borrow<str> + Eq + Hash,
+    {
         validate_id(&self.id, "text.id")?;
         validate_id(&self.track_id, "text.trackId")?;
         validate_text(&self.text, "text.text", true)?;
         let track = tracks
-            .get(&self.track_id)
+            .get(self.track_id.as_str())
             .ok_or_else(|| invalid("Text item references an unknown track"))?;
         if track.kind != TrackKind::Text {
             return Err(invalid("Text items must belong to a text track"));
@@ -1216,24 +1222,24 @@ impl ProjectDocument {
         let tracks: HashMap<_, _> = self
             .tracks
             .iter()
-            .map(|track| (track.id.clone(), track))
+            .map(|track| (track.id.as_str(), track))
             .collect();
         let assets: HashMap<_, _> = self
             .assets
             .iter()
-            .map(|asset| (asset.id.clone(), asset))
+            .map(|asset| (asset.id.as_str(), asset))
             .collect();
         let clips: HashMap<_, _> = self
             .clips
             .iter()
-            .map(|clip| (clip.id.clone(), clip))
+            .map(|clip| (clip.id.as_str(), clip))
             .collect();
         for clip in &self.clips {
             let track = tracks
-                .get(&clip.track_id)
+                .get(clip.track_id.as_str())
                 .ok_or_else(|| invalid("Clip references an unknown track"))?;
             let asset = assets
-                .get(&clip.asset_id)
+                .get(clip.asset_id.as_str())
                 .ok_or_else(|| invalid("Clip references an unknown asset"))?;
             clip.validate(track, asset)?;
         }
@@ -1244,19 +1250,23 @@ impl ProjectDocument {
         Ok(())
     }
 
-    fn validate_transition_graph(
+    fn validate_transition_graph<TrackId, ClipId>(
         &self,
-        tracks: &HashMap<String, &Track>,
-        clips: &HashMap<String, &MediaClip>,
-    ) -> Result<(), AppError> {
+        tracks: &HashMap<TrackId, &Track>,
+        clips: &HashMap<ClipId, &MediaClip>,
+    ) -> Result<(), AppError>
+    where
+        TrackId: Borrow<str> + Eq + Hash,
+        ClipId: Borrow<str> + Eq + Hash,
+    {
         let mut transitions_by_pair: HashMap<(&str, &str), Vec<&Transition>> = HashMap::new();
         for transition in &self.transitions {
             transition.validate_ids()?;
             let left = clips
-                .get(&transition.left_clip_id)
+                .get(transition.left_clip_id.as_str())
                 .ok_or_else(|| invalid("Transition references an unknown left clip"))?;
             let right = clips
-                .get(&transition.right_clip_id)
+                .get(transition.right_clip_id.as_str())
                 .ok_or_else(|| invalid("Transition references an unknown right clip"))?;
             if transition.left_clip_id == transition.right_clip_id {
                 return Err(invalid("A transition needs two different clips"));
@@ -1265,7 +1275,7 @@ impl ProjectDocument {
                 return Err(invalid("Transition clips must belong to the same track"));
             }
             let track = tracks
-                .get(&left.track_id)
+                .get(left.track_id.as_str())
                 .ok_or_else(|| invalid("Transition references an unknown track"))?;
             if track.kind != TrackKind::Video {
                 return Err(invalid("Dissolves are supported only on video tracks"));
@@ -1300,7 +1310,7 @@ impl ProjectDocument {
         let mut video_by_track: HashMap<&str, Vec<&MediaClip>> = HashMap::new();
         for clip in self.clips.iter().filter(|clip| {
             tracks
-                .get(&clip.track_id)
+                .get(clip.track_id.as_str())
                 .is_some_and(|track| track.kind == TrackKind::Video)
         }) {
             video_by_track
@@ -1333,10 +1343,10 @@ impl ProjectDocument {
             let mut ordered = track_clips;
             ordered.sort_by_key(|clip| (clip.start_frame, clip.id.as_str()));
             for (left_index, left) in ordered.iter().enumerate() {
+                let left_end = left.end_frame()?;
                 for right in ordered.iter().skip(left_index + 1) {
-                    let left_end = left.end_frame()?;
                     if right.start_frame >= left_end {
-                        continue;
+                        break;
                     }
                     let pair = (left.id.as_str(), right.id.as_str());
                     let Some(transitions) = transitions_by_pair.get(&pair) else {
@@ -1390,7 +1400,11 @@ impl ProjectDocument {
                 result.push(projection);
             }
         }
-        result.sort_by_key(|caption| (caption.timeline_start_frame, caption.caption_id.clone()));
+        result.sort_unstable_by(|left, right| {
+            left.timeline_start_frame
+                .cmp(&right.timeline_start_frame)
+                .then_with(|| left.caption_id.cmp(&right.caption_id))
+        });
         Ok(result)
     }
 }
@@ -1475,22 +1489,28 @@ impl ProjectEnvelope {
         for entry in self.history.undo.iter().rev() {
             entry
                 .delta
-                .apply_backward(&mut candidate)
+                .apply_validated(&mut candidate, false)
                 .map_err(|error| {
                     AppError::schema(format!("Undo history cannot be replayed: {error}"))
                 })?;
         }
         for entry in &self.history.undo {
-            entry.delta.apply_forward(&mut candidate).map_err(|error| {
-                AppError::schema(format!("Undo history cannot be replayed: {error}"))
-            })?;
+            entry
+                .delta
+                .apply_validated(&mut candidate, true)
+                .map_err(|error| {
+                    AppError::schema(format!("Undo history cannot be replayed: {error}"))
+                })?;
         }
         // The redo stack is popped from the end, so replay it in reverse
         // storage order from the current document.
         for entry in self.history.redo.iter().rev() {
-            entry.delta.apply_forward(&mut candidate).map_err(|error| {
-                AppError::schema(format!("Redo history cannot be replayed: {error}"))
-            })?;
+            entry
+                .delta
+                .apply_validated(&mut candidate, true)
+                .map_err(|error| {
+                    AppError::schema(format!("Redo history cannot be replayed: {error}"))
+                })?;
         }
         Ok(())
     }
@@ -1500,5 +1520,164 @@ impl ProjectEnvelope {
             let remove = self.receipts.len() - MAX_RECEIPTS;
             self.receipts.drain(0..remove);
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(value: u64) -> String {
+        format!("10000000-0000-4000-8000-{value:012x}")
+    }
+
+    fn video_document() -> ProjectDocument {
+        ProjectDocument::new(
+            "transition fixture",
+            AspectRatio::Landscape,
+            FrameRate::FPS_30,
+        )
+        .expect("document")
+    }
+
+    fn video_track(document: &ProjectDocument) -> String {
+        document
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .expect("video track")
+            .id
+            .clone()
+    }
+
+    fn clip(
+        clip_id: String,
+        track_id: String,
+        start_frame: u64,
+        duration_frames: u64,
+    ) -> MediaClip {
+        MediaClip {
+            id: clip_id,
+            track_id,
+            asset_id: id(100),
+            start_frame,
+            in_frame: 0,
+            duration_frames,
+            fit: FitMode::Contain,
+            center_x: 5_000,
+            center_y: 5_000,
+            scale: 10_000,
+            opacity: 10_000,
+            gain_db: 0.0,
+            audio_enabled: false,
+            fade_in_frames: 0,
+            fade_out_frames: 0,
+        }
+    }
+
+    fn video_asset() -> AssetManifest {
+        AssetManifest {
+            id: id(100),
+            kind: AssetKind::Video,
+            content_hash: "hash".to_owned(),
+            original: OriginalMediaMetadata {
+                file_name: "fixture.mp4".to_owned(),
+                streams: vec![OriginalStreamMetadata {
+                    kind: OriginalStreamKind::Video,
+                    codec: "h264".to_owned(),
+                    duration_ms: Some(8_000),
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            normalization: Some(NormalizedAsset {
+                renderer_version: "test".to_owned(),
+                epoch_ms: 0,
+                video: Some(NormalizedVideo {
+                    master_artifact_id: "master".to_owned(),
+                    proxy_artifact_id: None,
+                    frame_count: 240,
+                    width: 1_920,
+                    height: 1_080,
+                    fps_num: 30,
+                    fps_den: 1,
+                    active_start_frame: 0,
+                    active_end_frame: 240,
+                    source_start_ms: 0,
+                    source_end_ms: 8_000,
+                    proxy_frame_count: Some(240),
+                }),
+                audio: None,
+            }),
+        }
+    }
+
+    fn graph_result(
+        base: &ProjectDocument,
+        clips: Vec<MediaClip>,
+        transitions: Vec<Transition>,
+    ) -> Result<(), AppError> {
+        let mut document = base.clone();
+        document.assets.push(video_asset());
+        document.clips = clips;
+        document.transitions = transitions;
+        document.validate()
+    }
+
+    #[test]
+    fn transition_graph_sorts_arbitrary_clip_order_before_pair_scan() {
+        let document = video_document();
+        let track_id = video_track(&document);
+        let clips = vec![
+            clip(id(1), track_id.clone(), 200, 10),
+            clip(id(2), track_id.clone(), 0, 10),
+            clip(id(3), track_id, 100, 10),
+        ];
+        assert!(graph_result(&document, clips, Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn transition_graph_accepts_allowed_dissolve_overlap() {
+        let document = video_document();
+        let track_id = video_track(&document);
+        let left_id = id(10);
+        let right_id = id(11);
+        let clips = vec![
+            clip(left_id.clone(), track_id.clone(), 0, 100),
+            clip(right_id.clone(), track_id, 90, 100),
+        ];
+        let transitions = vec![Transition {
+            id: id(12),
+            left_clip_id: left_id,
+            right_clip_id: right_id,
+            duration_frames: 10,
+        }];
+        assert!(graph_result(&document, clips, transitions).is_ok());
+    }
+
+    #[test]
+    fn transition_graph_rejects_undeclared_and_triple_overlaps() {
+        let document = video_document();
+        let track_id = video_track(&document);
+        assert!(graph_result(
+            &document,
+            vec![
+                clip(id(20), track_id.clone(), 0, 100),
+                clip(id(21), track_id.clone(), 90, 100),
+            ],
+            Vec::new(),
+        )
+        .is_err());
+        assert!(graph_result(
+            &document,
+            vec![
+                clip(id(30), track_id.clone(), 0, 100),
+                clip(id(31), track_id.clone(), 10, 100),
+                clip(id(32), track_id, 20, 100),
+            ],
+            Vec::new(),
+        )
+        .is_err());
     }
 }
