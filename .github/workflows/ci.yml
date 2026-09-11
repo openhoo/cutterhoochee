@@ -201,3 +201,5 @@ jobs:
           test -f "$appimage"
           test -x "$appimage"
           bash scripts/release/verify-appimage.sh "$appimage" "$version"
+      - name: Verify optimized glib string iterator safety
+        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --test glib_variant_str_iter
