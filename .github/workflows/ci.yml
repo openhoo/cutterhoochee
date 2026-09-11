@@ -33,7 +33,7 @@ env:
   ARCH_IMAGE: "archlinux/archlinux@sha256:2685bf92cc6215cc922488ae8e80b4875f4bdf19fef648818b1742517ce27077"
   HOOVERSION_VERSION: "1.1.1"
   HOOLICY_VERSION: "0.3.2"
-  HOORAY_VERSION: "0.6.6"
+  TOOL_HOORAY_VERSION: "0.6.6"
   HOONARQUBE_VERSION: "0.8.1"
   HOONEEDSUPDATES_VERSION: "0.3.1"
 
@@ -73,7 +73,7 @@ jobs:
       - name: Scan dependencies and source with Hooray
         uses: openhoo/hooray/actions/scan@26aeb8cc43bb82248b4287037cac038185a2682d # v0.6.6
         with:
-          version: ${{ env.HOORAY_VERSION }}
+          version: ${{ env.TOOL_HOORAY_VERSION }}
           policy: hooray-policy.yaml
           format: sarif
           output: ${{ runner.temp }}/hooray.sarif
