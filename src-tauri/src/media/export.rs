@@ -264,7 +264,8 @@ impl ExportRuntime {
             caller.generation,
             Some(capture.plan.project_id.clone()),
         )?
-        .with_run_id(caller.run_id().map(ToOwned::to_owned));
+        .with_run_id(caller.run_id().map(ToOwned::to_owned))
+        .with_activity_id(caller.activity_id.clone());
         let job_output = output.clone();
         let worker_capture = capture;
         let worker_srt = srt_contents;

@@ -1,4 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import type {
+  AgentActivity,
   EditOp,
   EditorClient,
   EditorClientError,
@@ -8,6 +10,7 @@ import type {
   ProjectSnapshot,
   TimelineSelection,
 } from "@cutterhoochee/shared";
+import { isAgentActivity } from "@/activity/AgentActivityStore";
 
 /**
  * The shared client is the only UI/native boundary. This generic helper keeps
@@ -151,3 +154,14 @@ export function parseEvent(value: unknown): EventPayload | null {
 }
 
 export type { EditOp, EditorReply, EditorRequest, ProjectSnapshot, TimelineSelection };
+export async function readAgentActivitySnapshot(
+  generation: number,
+  projectId: string | null,
+): Promise<readonly AgentActivity[]> {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return [];
+  const value = await invoke<unknown>("agent_activity_snapshot", { generation, projectId });
+  const root = record(value);
+  const values = Array.isArray(value) ? value : root.activities;
+  if (!Array.isArray(values)) return [];
+  return values.filter(isAgentActivity);
+}

@@ -275,6 +275,29 @@ impl ProjectStore {
         verify_store_identity(&self.inner, state.project_identity)?;
         Ok(state.envelope.clone())
     }
+    /// Return the exact committed transaction delta when its history entry is
+    /// still retained. This avoids attributing a later concurrent snapshot to
+    /// an earlier activity receipt.
+    pub fn transaction_delta(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<crate::editor::history::TransactionDelta>, AppError> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| AppError::io("The project writer lock is unavailable"))?;
+        ensure_healthy(&state)?;
+        verify_store_identity(&self.inner, state.project_identity)?;
+        Ok(state
+            .envelope
+            .history
+            .undo
+            .iter()
+            .chain(state.envelope.history.redo.iter())
+            .find(|entry| entry.transaction_id == transaction_id)
+            .map(|entry| entry.delta.clone()))
+    }
 
     pub fn load_transcripts(&self, ids: &[String]) -> Result<Vec<Transcript>, AppError> {
         let state = self

@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Bot, Check, ChevronDown, CircleStop, KeyRound, Loader2, MessageCircle, RotateCcw, Send, ShieldCheck, Square, Wrench, X } from "lucide-react";
+import { AlertCircle, Bot, Check, ChevronDown, CircleStop, KeyRound, Loader2, MessageCircle, RotateCcw, Send, ShieldAlert, ShieldCheck, Square, Wrench, X } from "lucide-react";
 
 import type { EditorCallContext, EditorClient, ProjectSnapshot } from "@cutterhoochee/shared";
-import { eventData, record, replyPayload, stringValue, type EventPayload } from "@/lib/native";
+import {
+  AgentActivityStore,
+  isTerminalActivity,
+  useAgentActivities,
+} from "@/activity/AgentActivityStore";
+import { eventData, isEditorClientError, record, replyPayload, stringValue, type EventPayload } from "@/lib/native";
 import { Button } from "@/components/ui/button";
 
 type ChatMessage = { id: string; role: "user" | "assistant" | "system"; text: string; pending?: boolean; tool?: string; toolCallId?: string; status?: string; usage?: string };
@@ -39,23 +44,39 @@ type NativeScope = EditorCallContext;
 function sameScope(left: NativeScope, right: NativeScope): boolean {
   return left.generation === right.generation && left.projectId === right.projectId;
 }
-
 function eventInScope(event: EventPayload, scope: NativeScope): boolean {
   return event.generation === scope.generation && event.projectId === scope.projectId;
 }
-
-export function ChatPanel({ client, snapshot, eventLog, onRefresh, onNotice, onProviderSettings }: { client: EditorClient; snapshot: ProjectSnapshot; eventLog: EventPayload[]; onRefresh: () => Promise<void>; onNotice: (notice: string) => void; onProviderSettings: () => void }) {
+export function ChatPanel({
+  client,
+  snapshot,
+  eventLog,
+  activityStore,
+  onRefresh,
+  onNotice,
+  onProviderSettings,
+}: {
+  client: EditorClient;
+  snapshot: ProjectSnapshot;
+  eventLog: EventPayload[];
+  activityStore: AgentActivityStore;
+  onRefresh: () => Promise<void>;
+  onNotice: (notice: string) => void;
+  onProviderSettings: () => void;
+}) {
   const nativeContext = client.getContext();
+  const activities = useAgentActivities(activityStore);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [evidence, setEvidence] = useState<EvidenceRequest | null>(null);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const processedEvents = useRef<Set<EventPayload> | null>(null);
   const historyScope = useRef<NativeScope | null>(null);
   const mounted = useRef(false);
+  const stopRequested = useRef(false);
   const scopeRef = useRef(nativeContext);
-  scopeRef.current = nativeContext;
   const isCurrentScope = (expected: NativeScope) => (
     mounted.current && sameScope(scopeRef.current, expected) && sameScope(client.getContext(), expected)
   );
@@ -109,11 +130,18 @@ export function ChatPanel({ client, snapshot, eventLog, onRefresh, onNotice, onP
       if (!isCurrentScope(eventScope)) break;
       const data = eventData(activity);
       const eventKind = activity.kind.toLowerCase();
-      if (eventKind === "assistant_start") setSending(true);
+      if (eventKind === "assistant_start") {
+        setSending(true);
+        setStopping(false);
+      }
       if (eventKind === "assistant_error") {
         setSending(false);
+        setStopping(false);
         const text = stringValue(record(data.error).message || data.message || data.error, "Assistant request failed.");
-        setMessages((current) => [...current.filter((message) => !message.pending), { id: `${Date.now()}-error`, role: "system", text, status: "failed" }]);
+        setMessages((current) => [
+          ...current.filter((message) => !message.pending || Boolean(message.text)).map((message) => message.pending ? { ...message, pending: false, status: "failed" } : message),
+          { id: `${Date.now()}-error`, role: "system", text, status: "failed" },
+        ]);
       }
       const pendingEvidence = eventKind.includes("evidence") && (eventKind.includes("pending") || eventKind.includes("requested"));
       if (pendingEvidence) {
@@ -188,9 +216,17 @@ export function ChatPanel({ client, snapshot, eventLog, onRefresh, onNotice, onP
         const isError = Boolean(data.isError) || Boolean(data.error);
         setMessages((current) => current.map((message) => (message.status === "running" && ((toolCallId && message.toolCallId === toolCallId) || (!toolCallId && tool && message.tool === tool))) ? { ...message, status: isError ? "failed" : "complete", text: stringValue(data.text || data.error, `${message.tool || "Tool"} ${isError ? "failed" : "completed"}`) } : message));
       }
+      if (eventKind.includes("assistant") && (eventKind.includes("cancel") || eventKind.includes("stopped"))) {
+        setSending(false);
+        setStopping(false);
+        stopRequested.current = false;
+        setMessages((current) => current.filter((message) => !message.pending || Boolean(message.text)).map((message) => message.pending ? { ...message, pending: false, status: "cancelled" } : message));
+      }
       if (eventKind === "assistant_settled" || eventKind === "assistant_end" || eventKind === "agent_settled" || eventKind === "agent_end") {
         setSending(false);
-        setMessages((current) => current.filter((message) => !message.pending || message.text).map((message) => ({ ...message, pending: false, status: message.status === "running" ? "complete" : message.status })));
+        setStopping(false);
+        stopRequested.current = false;
+        setMessages((current) => current.filter((message) => !message.pending || Boolean(message.text)).map((message) => message.pending ? { ...message, pending: false } : message));
       }
     }
     if (isCurrentScope(eventScope)) processedEvents.current = new Set(eventLog);
@@ -206,31 +242,52 @@ export function ChatPanel({ client, snapshot, eventLog, onRefresh, onNotice, onP
     if (!isCurrentScope(requestScope) || requestScope.projectId !== snapshot.document.projectId) return;
     setDraft("");
     setSending(true);
+    setStopping(false);
+    stopRequested.current = false;
     setMessages((current) => [...current, { id: `${Date.now()}-user`, role: "user", text }, { id: `${Date.now()}-pending`, role: "assistant", text: "", pending: true }]);
     try {
       await client.call({ method: "assistant", params: { action: "prompt", text } }, requestScope);
       if (!isCurrentScope(requestScope)) return;
     } catch (error) {
       if (!isCurrentScope(requestScope)) return;
-      setDraft((current) => current || text);
+      const cancelled = stopRequested.current || (isEditorClientError(error) && error.code === "JOB_CANCELLED");
       setSending(false);
-      setMessages((current) => [...current.filter((message) => !message.pending), { id: `${Date.now()}-error`, role: "system", text: error instanceof Error ? error.message : "Assistant request failed.", status: "failed" }]);
+      setStopping(false);
+      if (cancelled) {
+        setMessages((current) => current.filter((message) => !message.pending || Boolean(message.text)).map((message) => message.pending ? { ...message, pending: false, status: "cancelled" } : message));
+        return;
+      }
+      setDraft((current) => current || text);
+      setMessages((current) => [
+        ...current.filter((message) => !message.pending || Boolean(message.text)).map((message) => message.pending ? { ...message, pending: false, status: "failed" } : message),
+        { id: `${Date.now()}-error`, role: "system", text: error instanceof Error ? error.message : "Assistant request failed.", status: "failed" },
+      ]);
       onNotice(error instanceof Error ? error.message : "Assistant request failed.");
     }
   };
-
   const stop = async () => {
     const requestScope = client.getContext();
-    if (!isCurrentScope(requestScope)) return;
+    if (!isCurrentScope(requestScope) || stopping) return;
+    setStopping(true);
+    stopRequested.current = true;
     try {
-      await client.call({ method: "assistant", params: { action: "stop" } }, requestScope);
+      const reply = await client.call({ method: "assistant", params: { action: "stop" } }, requestScope);
+      if (!isCurrentScope(requestScope)) return;
+      const result = replyPayload(reply);
+      if (result.stopped !== true) {
+        setStopping(false);
+        stopRequested.current = false;
+        onNotice("Native assistant did not confirm cancellation; it remains active.");
+        return;
+      }
+      // A stop acknowledgement only records the request. Keep partial text and
+      // the sending state until the native settled/cancelled event arrives.
     } catch (error) {
       if (!isCurrentScope(requestScope)) return;
+      setStopping(false);
+      stopRequested.current = false;
       onNotice(error instanceof Error ? error.message : "Assistant could not stop.");
     }
-    if (!isCurrentScope(requestScope)) return;
-    setSending(false);
-    setMessages((current) => current.map((message) => message.pending ? { ...message, pending: false, text: "Stopped." } : message));
   };
 
   const restart = async () => {
@@ -266,5 +323,18 @@ export function ChatPanel({ client, snapshot, eventLog, onRefresh, onNotice, onP
       onNotice(error instanceof Error ? error.message : "Evidence permission could not be recorded.");
     }
   };
-  return <div className="chat-content"><div className="chat-intent"><MessageCircle aria-hidden="true" /><span>Ask for an edit, or inspect your footage with local evidence.</span><button type="button" onClick={onProviderSettings} aria-label="Connect an assistant provider"><KeyRound aria-hidden="true" /></button></div><div className="chat-messages" aria-live="polite">{messages.length === 0 ? <div className="chat-empty"><Bot aria-hidden="true" /><strong>What should we make?</strong><span>Try “remove the first two seconds”, “find the setup explanation”, or “make this vertical”.</span><div className="prompt-chips"><button type="button" onClick={() => setDraft("Remove the first two seconds")}>Remove a moment</button><button type="button" onClick={() => setDraft("Add captions")}>Add captions</button><button type="button" onClick={() => setDraft("Make this vertical")}>Make it vertical</button></div></div> : messages.map((message) => <div className={`chat-message ${message.role} ${message.pending ? "pending" : ""}`} key={message.id}>{message.role === "assistant" ? <span className="message-avatar"><Bot aria-hidden="true" /></span> : null}<div className="message-bubble">{message.tool ? <button type="button" className="tool-card" onClick={() => setExpandedTools((current) => ({ ...current, [message.id]: !(current[message.id] ?? message.status === "failed") }))}><span className="tool-card-leading"><Wrench aria-hidden="true" /><strong>{message.tool}</strong></span><span className={`tool-status ${message.status}`}>{message.status === "running" ? <Loader2 className="spin" aria-hidden="true" /> : message.status === "complete" ? <Check aria-hidden="true" /> : <CircleStop aria-hidden="true" />}</span><ChevronDown className={(expandedTools[message.id] ?? message.status === "failed") ? "rotate-180" : ""} aria-hidden="true" /></button> : null}{!message.tool && message.text ? <p>{message.text}</p> : message.pending ? <span className="typing-indicator"><i /><i /><i /></span> : null}{message.status === "failed" ? <small className="message-error">Failed · retry from the prompt</small> : null}{message.tool && (expandedTools[message.id] ?? message.status === "failed") ? <div className="tool-details">{message.text || "No additional tool details."}</div> : null}</div></div>)}</div>{toolEvents.length > 0 ? <div className="chat-activity"><Wrench aria-hidden="true" /><span>{toolEvents.length} tool updates</span><span className="activity-dot" /></div> : null}{evidence ? <div className="evidence-consent" role="dialog" aria-label="Evidence consent"><ShieldCheck aria-hidden="true" /><div><strong>Share project evidence?</strong><p>Allow {evidence.providerId} ({evidence.accountId}) to receive sampled frames and transcript spans from this project{evidence.scope ? ` · ${evidence.scope}` : ""}?</p><div className="consent-actions"><Button variant="ghost" size="sm" onClick={() => void answerEvidence(false)}><X aria-hidden="true" />Deny</Button><Button size="sm" onClick={() => void answerEvidence(true)}><ShieldCheck aria-hidden="true" />Allow evidence</Button></div></div></div> : null}<form className="chat-composer" onSubmit={(event) => void submit(event)}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Describe an edit…" rows={2} aria-label="Message assistant" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-footer"><span>Enter to send · Shift+Enter for a new line</span><div className="composer-actions">{sending ? <Button variant="ghost" size="sm" type="button" onClick={() => void stop()}><Square aria-hidden="true" />Stop</Button> : null}<Button variant="primary" size="icon" type="submit" aria-label="Send message" disabled={!draft.trim() || sending}><Send aria-hidden="true" /></Button></div></div></form><button className="new-session-button" type="button" onClick={() => void restart()}><RotateCcw aria-hidden="true" />New assistant session</button></div>;
+  const activeActivities = useMemo(() => activities.filter((activity) => !isTerminalActivity(activity)), [activities]);
+  const failedActivities = useMemo(() => activities.filter((activity) => activity.phase === "failed"), [activities]);
+  return (
+    <div className="chat-content">
+      <div className="chat-intent"><MessageCircle aria-hidden="true" /><span>Ask for an edit, or inspect your footage with local evidence.</span><button type="button" onClick={onProviderSettings} aria-label="Connect an assistant provider"><KeyRound aria-hidden="true" /></button></div>
+      <div className="chat-messages" aria-live="polite">
+        {messages.length === 0 ? <div className="chat-empty"><Bot aria-hidden="true" /><strong>What should we make?</strong><span>Try “remove the first two seconds”, “find the setup explanation”, or “make this vertical”.</span><div className="prompt-chips"><button type="button" onClick={() => setDraft("Remove the first two seconds")}>Remove a moment</button><button type="button" onClick={() => setDraft("Add captions")}>Add captions</button><button type="button" onClick={() => setDraft("Make this vertical")}>Make it vertical</button></div></div> : messages.map((message) => <div className={`chat-message ${message.role} ${message.pending ? "pending" : ""}`} key={message.id}>{message.role === "assistant" ? <span className="message-avatar"><Bot aria-hidden="true" /></span> : null}<div className="message-bubble">{message.tool ? <button type="button" className="tool-card" onClick={() => setExpandedTools((current) => ({ ...current, [message.id]: !(current[message.id] ?? message.status === "failed") }))}><span className="tool-card-leading"><Wrench aria-hidden="true" /><strong>{message.tool}</strong></span><span className={`tool-status ${message.status}`} aria-label={message.status ?? "tool"}>{message.status === "running" ? <Loader2 className="spin" aria-hidden="true" /> : message.status === "awaiting_approval" ? <ShieldAlert aria-hidden="true" /> : message.status === "complete" ? <Check aria-hidden="true" /> : message.status === "failed" ? <AlertCircle aria-hidden="true" /> : message.status === "cancelled" ? <CircleStop aria-hidden="true" /> : <CircleStop aria-hidden="true" />}</span><ChevronDown className={(expandedTools[message.id] ?? message.status === "failed") ? "rotate-180" : ""} aria-hidden="true" /></button> : null}{!message.tool && message.text ? <p>{message.text}</p> : message.pending ? <span className="typing-indicator"><i /><i /><i /></span> : null}{message.status === "failed" ? <small className="message-error">Failed · retry from the prompt</small> : message.status === "cancelled" ? <small className="message-error">Cancelled; partial text is retained</small> : message.status === "awaiting_approval" ? <small className="message-error">Waiting for approval</small> : null}{message.tool && (expandedTools[message.id] ?? message.status === "failed") ? <div className="tool-details">{message.text || "No additional tool details."}</div> : null}</div></div>)}
+      </div>
+      {activeActivities.length > 0 || failedActivities.length > 0 ? <div className="chat-activity" aria-live="polite"><Wrench aria-hidden="true" /><span>{activeActivities.length > 0 ? `${activeActivities.length} native operation${activeActivities.length === 1 ? "" : "s"} active` : `${failedActivities.length} native operation${failedActivities.length === 1 ? "" : "s"} failed`}</span><span className="activity-dot" /></div> : toolEvents.length > 0 ? <div className="chat-activity"><Wrench aria-hidden="true" /><span>{toolEvents.length} tool updates</span><span className="activity-dot" /></div> : null}
+      {evidence ? <div className="evidence-consent" role="dialog" aria-label="Evidence consent"><ShieldCheck aria-hidden="true" /><div><strong>Share project evidence?</strong><p>Allow {evidence.providerId} ({evidence.accountId}) to receive sampled frames and transcript spans from this project{evidence.scope ? ` · ${evidence.scope}` : ""}?</p><div className="consent-actions"><Button variant="ghost" size="sm" onClick={() => void answerEvidence(false)}><X aria-hidden="true" />Deny</Button><Button size="sm" onClick={() => void answerEvidence(true)}><ShieldCheck aria-hidden="true" />Allow evidence</Button></div></div></div> : null}
+      <form className="chat-composer" onSubmit={(event) => void submit(event)}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Describe an edit…" rows={2} aria-label="Message assistant" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><div className="composer-footer"><span>Enter to send · Shift+Enter for a new line</span><div className="composer-actions">{sending ? <Button variant="ghost" size="sm" type="button" disabled={stopping} onClick={() => void stop()}>{stopping ? <Loader2 className="spin" aria-hidden="true" /> : <Square aria-hidden="true" />}{stopping ? "Stopping…" : "Stop"}</Button> : null}<Button variant="primary" size="icon" type="submit" aria-label="Send message" disabled={!draft.trim() || sending}><Send aria-hidden="true" /></Button></div></div></form>
+      <button className="new-session-button" type="button" onClick={() => void restart()}><RotateCcw aria-hidden="true" />New assistant session</button>
+    </div>
+  );
 }

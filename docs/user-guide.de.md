@@ -612,6 +612,12 @@ Der rechte Bereich verwendet Pi als Assistenten-Harness. Formulieren Sie eine Bi
 
 Der Assistent soll seine Aktionen auf validierte Projektoperationen abbilden. Bei unklarer Auswahl, einer veralteten Revision oder einer fehlenden Quelle kann die native Schicht die Aktion ablehnen. Prüfen Sie die Timeline danach trotzdem selbst.
 
+**Activity → Native work** zeigt native Aktionen, betroffene Ziele, bestätigte Projektänderungen, wartende Freigaben und Hintergrundaufträge. Eine Job-ID bedeutet, dass Arbeit gestartet wurde, nicht dass sie abgeschlossen ist. **Cancel** fordert einen Abbruch an; Endzustand und Fehler stammen vom nativen Auftrag. **Stop** macht bereits bestätigte Änderungen nicht rückgängig.
+
+Aktivitätshervorhebungen sind von Ihrer Auswahl getrennt. Lesezugriffe markieren untersuchte Ziele kurz; bestätigte Änderungen können den betroffenen Bereich, die vorherige Clipposition oder Vorher-/Nachher-Werte im Inspector zeigen. Dry Runs zeigen keine Animation einer bestätigten Änderung. Große Änderungen werden mit begrenzten Hervorhebungen gebündelt. **Show** macht ein Ziel außerhalb der Ansicht ausdrücklich auffindbar, ohne es auszuwählen oder die Wiedergabe zu starten. Aktivität allein übernimmt weder Fokus noch Scrollposition oder Playhead; die Einstellung für reduzierte Bewegung wird beachtet.
+
+Ausdrückliche Wiedergabe-, Pause- und Seek-Aufträge des Assistenten verwenden den sichtbaren Player und warten auf dessen Bestätigung. Untersuchen und andere reine Lesezugriffe starten die Wiedergabe nicht neu. Eine bestätigte Zeitbereichsauswahl bleibt sichtbar, bis eine andere Auswahl sie ersetzt. Prüfen Sie vor einem erneuten Versuch die tatsächliche Revision und das native Ergebnis: Ein späterer Abbruch bedeutet nicht, dass eine frühere Änderung zurückgerollt wurde.
+
 ### Evidence und direkte Videodaten
 
 Ein Sprachmodell erhält nicht automatisch das native Videomedium. Pi kann lokale, vom Projekt erzeugte Evidence anfordern, beispielsweise:

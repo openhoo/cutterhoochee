@@ -1,10 +1,15 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, FileAudio, FileImage, FileVideo, FolderPlus, MoreHorizontal, Plus, RefreshCw, Search, Trash2, Upload, Video } from "lucide-react";
 
 import type { EditorClient, ProjectSnapshot } from "@cutterhoochee/shared";
 import { Button } from "@/components/ui/button";
+import {
+  AgentActivityStore,
+  useAgentActivities,
+  isTerminalActivity,
+  type ActivityReveal,
+} from "@/activity/AgentActivityStore";
 import { callNative, formatDuration, record, replyPayload, stringValue } from "@/lib/native";
-
 type ThumbnailPreview = {
   scope: string;
   sourceArtifactId: string;
@@ -13,12 +18,12 @@ type ThumbnailPreview = {
   loading: boolean;
   error?: string;
 };
-
 const THUMBNAIL_CONCURRENCY = 2;
-
 export const MediaLibrary = memo(function MediaLibrary({
   client,
   snapshot,
+  activityStore,
+  revealActivity,
   onRefresh,
   onNotice,
   onImport,
@@ -26,6 +31,8 @@ export const MediaLibrary = memo(function MediaLibrary({
 }: {
   client: EditorClient;
   snapshot: ProjectSnapshot;
+  activityStore: AgentActivityStore;
+  revealActivity?: ActivityReveal | null;
   onRefresh: () => Promise<void>;
   onNotice: (notice: string) => void;
   onImport: () => void;
@@ -34,6 +41,45 @@ export const MediaLibrary = memo(function MediaLibrary({
   const [query, setQuery] = useState("");
   const [busyAsset, setBusyAsset] = useState<string | null>(null);
   const [inspected, setInspected] = useState<string | null>(null);
+  const activities = useAgentActivities(activityStore);
+  const workByAsset = useMemo(() => {
+    const result = new Map<string, (typeof activities)[number]>();
+    for (const activity of activities) {
+      if (activity.jobIds.length === 0) continue;
+      for (const target of activity.targets) if (target.kind === "asset" && !result.has(target.id)) result.set(target.id, activity);
+    }
+    return result;
+  }, [activities]);
+  const attentionDeadlines = useRef(new Map<string, number>());
+  const [attentionEpoch, setAttentionEpoch] = useState(0);
+  useEffect(() => {
+    const keys = new Set(activities.map((activity) => `${activity.id}:${activity.sequence}`));
+    for (const key of attentionDeadlines.current.keys()) if (!keys.has(key)) attentionDeadlines.current.delete(key);
+    const now = performance.now();
+    let next = Infinity;
+    for (const activity of activities) {
+      if (activity.origin !== "agent" || activity.phase !== "completed" || activityStore.isHydrated(activity.id)) continue;
+      const key = `${activity.id}:${activity.sequence}`;
+      if (!attentionDeadlines.current.has(key)) attentionDeadlines.current.set(key, now + 1800);
+      const deadline = attentionDeadlines.current.get(key)!;
+      if (deadline > now) next = Math.min(next, deadline);
+    }
+    if (!Number.isFinite(next)) return;
+    const timer = window.setTimeout(() => setAttentionEpoch((epoch) => epoch + 1), Math.max(1, next - now));
+    return () => window.clearTimeout(timer);
+  }, [activities, activityStore, attentionEpoch]);
+  const activityAssetIds = useMemo(() => new Set(activities.filter((activity) => activity.origin === "agent"
+    && activity.phase !== "failed" && activity.phase !== "cancelled"
+    && (activity.phase !== "completed" || (!activityStore.isHydrated(activity.id) && performance.now() < (attentionDeadlines.current.get(`${activity.id}:${activity.sequence}`) ?? Infinity))))
+    .flatMap((activity) => activity.targets.filter((target) => target.kind === "asset").map((target) => target.id))), [activities, activityStore, attentionEpoch]);
+  const revealedAssetIds = useMemo(() => new Set((revealActivity?.targets ?? []).filter((target) => target.kind === "asset").map((target) => target.id)), [revealActivity]);
+  const itemRefs = useRef<Record<string, HTMLElement | null>>({});
+  useEffect(() => {
+    const assetId = revealActivity?.targets.find((target) => target.kind === "asset")?.id;
+    if (!assetId) return;
+    const frame = window.requestAnimationFrame(() => itemRefs.current[assetId]?.scrollIntoView({ block: "nearest", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealActivity?.requestId]);
   const [thumbnails, setThumbnails] = useState<Record<string, ThumbnailPreview>>({});
   const assets = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -193,13 +239,17 @@ export const MediaLibrary = memo(function MediaLibrary({
             codec,
             typeof asset.original.byteSize === "number" ? formatBytes(asset.original.byteSize) : undefined,
           ].filter((value): value is string => Boolean(value)).join(" · ");
+          const agentAttention = activityAssetIds.has(asset.id);
+          const revealed = revealedAssetIds.has(asset.id);
+          const work = workByAsset.get(asset.id);
           const thumbnailError = thumbnail?.error;
           return <article
-            className={selected ? "media-item selected" : "media-item"}
+            className={`media-item${selected ? " selected" : ""}${agentAttention ? " agent-attention" : ""}${revealed ? " activity-revealed" : ""}`}
             role="listitem"
             aria-label={`${asset.original.fileName} · ${metadata}`}
             tabIndex={0}
             key={asset.id}
+            ref={(element) => { itemRefs.current[asset.id] = element; }}
             draggable
             onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-cutterhoochee-asset", asset.id); }}
             onClick={() => setInspected(asset.id)}
@@ -235,6 +285,17 @@ export const MediaLibrary = memo(function MediaLibrary({
               <div className="media-item-title" title={asset.original.fileName}>{asset.original.fileName}</div>
               <div className="media-item-meta">{metadata}</div>
               {!ready ? <div className="asset-warning" role="status"><AlertTriangle aria-hidden="true" />{normalized ? "Media preparation is incomplete." : "Preparing normalized media…"}</div> : thumbnail?.loading ? <div className="asset-warning" role="status">Generating thumbnail…</div> : thumbnailError ? <div className="asset-warning" title={thumbnailError}><AlertTriangle aria-hidden="true" />Thumbnail unavailable.</div> : null}
+              {work ? <div className="media-job-status">
+                <span role="status">{work.label} · {work.phase.replaceAll("_", " ")}</span>
+                {work.progress !== undefined && !isTerminalActivity(work) ? <progress max={1} value={work.progress} aria-label={`Job progress for ${asset.original.fileName}`} /> : null}
+                {work.error ? <span role="alert">{work.error.message}</span> : null}
+                {!isTerminalActivity(work) ? <Button variant="ghost" size="sm" disabled={work.phase === "cancelling"} onClick={(event) => {
+                  event.stopPropagation();
+                  void Promise.all(work.jobIds.map((jobId) => callNative(client, { method: "jobs", params: { action: "cancel", jobId } })))
+                    .then(() => onNotice("Cancel requested; waiting for native confirmation."))
+                    .catch((error: unknown) => onNotice(error instanceof Error ? error.message : "Cancel request failed."));
+                }}>Cancel</Button> : null}
+              </div> : null}
             </div>
             {selected ? <div className="asset-actions" onClick={(event) => event.stopPropagation()}>{ready && onInsert ? <Button variant="secondary" size="sm" disabled={busyAsset === asset.id} onClick={() => void onInsert(asset.id)}><Plus aria-hidden="true" />Add to timeline</Button> : null}<Button variant="ghost" size="sm" disabled={busyAsset === asset.id} onClick={() => void mediaAction(asset.id, "inspect")}><Video aria-hidden="true" />Inspect</Button>{ready ? null : <Button variant="ghost" size="sm" disabled={busyAsset === asset.id} onClick={() => void mediaAction(asset.id, "relink")}><RefreshCw aria-hidden="true" />Relink</Button>}<Button variant="ghost" size="sm" disabled={busyAsset === asset.id} onClick={() => void mediaAction(asset.id, "remove")}><Trash2 aria-hidden="true" />Remove</Button></div> : null}
             <button className="icon-button" type="button" aria-label={`Actions for ${asset.original.fileName}`} onClick={(event) => { event.stopPropagation(); setInspected(selected ? null : asset.id); }}><MoreHorizontal aria-hidden="true" /></button>

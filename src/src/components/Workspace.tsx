@@ -54,6 +54,12 @@ import {
   type EventPayload,
 } from "@/lib/native";
 import { ChatPanel } from "@/components/ChatPanel";
+import { ActivityPanel } from "@/components/ActivityPanel";
+import {
+  AgentActivityStore,
+  isAgentActivity,
+  type ActivityReveal,
+} from "@/activity/AgentActivityStore";
 import { ClipInspector } from "@/components/ClipInspector";
 import { ExportDialog } from "@/components/ExportDialog";
 import { MediaLibrary } from "@/components/MediaLibrary";
@@ -169,6 +175,26 @@ function errorMessage(error: unknown): string {
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
+function clampSelection(
+  value: TimelineSelection,
+  snapshot: ProjectSnapshot,
+  timeline: TimelineSnapshot | null,
+): TimelineSelection {
+  const knownClips = new Set(snapshot.document.clips.map((clip) => clip.id));
+  const knownText = new Set(snapshot.document.textItems.map((item) => item.id));
+  const clipIds = value.clipIds.filter((id) => knownClips.has(id));
+  const textIds = value.textIds.filter((id) => knownText.has(id));
+  const duration = Math.max(0, timeline?.durationFrames ?? 0);
+  const playheadFrame = Math.max(0, Math.min(duration, Number.isSafeInteger(value.playheadFrame) ? value.playheadFrame : 0));
+  if (clipIds.length > 0 || textIds.length > 0 || !value.range) {
+    return { clipIds, textIds, playheadFrame };
+  }
+  const startFrame = Math.max(0, Math.min(duration, value.range.startFrame));
+  const endFrame = Math.max(startFrame, Math.min(duration, value.range.endFrame));
+  return endFrame > startFrame
+    ? { clipIds, textIds, playheadFrame, range: { startFrame, endFrame } }
+    : { clipIds, textIds, playheadFrame };
+}
 
 function eventText(event: WorkspaceEvent): string {
   const data = record(event.data);
@@ -206,10 +232,18 @@ export function Workspace({
   const [exportOpen, setExportOpen] = useState(false);
   const [eventLog, setEventLog] = useState<WorkspaceEvent[]>([]);
   const [transportPlaying, setTransportPlaying] = useState(false);
+  const [revealActivity, setRevealActivity] = useState<ActivityReveal | null>(null);
+  const activityStore = useMemo(
+    () => new AgentActivityStore({ projectId: snapshot.document.projectId, generation: status.generation }),
+    [snapshot.document.projectId, status.generation],
+  );
+  const refreshedActivityRevisions = useMemo(() => new Map<string, number | undefined>(), [activityStore]);
   const chatResizeStart = useRef<{ x: number; width: number } | null>(null);
   const timelineResizeStart = useRef<{ y: number; height: number } | null>(null);
   const permissionAnswering = useRef<string | null>(null);
   const permissionPollToken = useRef(0);
+  const selectionMutation = useRef(0);
+  const lastSelectionActivity = useRef(-1);
   const frameStoreRef = useRef<PlaybackFrameStore | null>(null);
   const frameStore = frameStoreRef.current ?? (frameStoreRef.current = new PlaybackFrameStore(selection.playheadFrame));
 
@@ -235,18 +269,28 @@ export function Workspace({
     },
     [client, refresh, snapshot.document.revision],
   );
-
   const updateSelection = useCallback(
     async (next: TimelineSelection) => {
-      setSelection(next);
+      const request = ++selectionMutation.current;
+      const previous = selection;
+      const optimistic = clampSelection(next, snapshot, timeline);
+      setSelection(optimistic);
+      frameStore.set(optimistic.playheadFrame);
       try {
-        const updated = await client.setTimelineSelection(next);
-        onTimeline(updated);
+        const updated = await client.setTimelineSelection(optimistic);
+        if (request !== selectionMutation.current) return;
+        const authoritative = clampSelection(updated.selection, snapshot, updated);
+        setSelection(authoritative);
+        frameStore.set(authoritative.playheadFrame);
+        onTimeline({ ...updated, selection: authoritative });
       } catch (error) {
+        if (request !== selectionMutation.current) return;
+        setSelection(previous);
+        frameStore.set(previous.playheadFrame);
         setNotice(errorMessage(error));
       }
     },
-    [client, frameStore, onTimeline],
+    [client, frameStore, onTimeline, selection, snapshot, timeline],
   );
 
   const projectCommand = useCallback(
@@ -262,9 +306,14 @@ export function Workspace({
   );
 
   useEffect(() => {
-    const nextSelection = timeline?.selection ?? { clipIds: [], textIds: [], playheadFrame: 0 };
+    const nextSelection = clampSelection(
+      timeline?.selection ?? { clipIds: [], textIds: [], playheadFrame: 0 },
+      snapshot,
+      timeline,
+    );
     setSelection(nextSelection);
-  }, [timeline]);
+    frameStore.set(nextSelection.playheadFrame);
+  }, [frameStore, snapshot, timeline]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -288,6 +337,27 @@ export function Workspace({
       setEventLog((current) => [...current.slice(-255), nextEvent]);
       const data = eventData(nextEvent);
       const eventKind = nextEvent.kind.toLowerCase();
+      if (eventKind === "agent_activity") {
+        const candidate = record(data.activity ?? data);
+        const activity = isAgentActivity(candidate) ? candidate : null;
+        if (activity) {
+          activityStore.ingest(activity);
+          if (activity.origin === "agent" && activity.tool === "timeline" && activity.action === "selection" && activity.phase === "completed" && activity.sequence > lastSelectionActivity.current) {
+            lastSelectionActivity.current = activity.sequence;
+            const mutation = ++selectionMutation.current;
+            void client.timelineSnapshot().then((updated) => {
+              const currentContext = client.getContext();
+              if (disposed || mutation !== selectionMutation.current || currentContext.generation !== context.generation || currentContext.projectId !== context.projectId) return;
+              onTimeline(updated);
+            }).catch((error) => setNotice(errorMessage(error)));
+          }
+          if (activity.changed && !activity.dryRun && (!refreshedActivityRevisions.has(activity.id) || refreshedActivityRevisions.get(activity.id) !== activity.revision)) {
+            refreshedActivityRevisions.set(activity.id, activity.revision);
+            if (refreshedActivityRevisions.size > 128) refreshedActivityRevisions.delete(refreshedActivityRevisions.keys().next().value!);
+            void refresh().catch(() => undefined);
+          }
+        }
+      }
       if (eventKind.includes("permission") && (eventKind.includes("pending") || eventKind.includes("requested") || eventKind === "permission")) {
         const request = permissionFromValue(data);
         if (request && permissionAnswering.current !== request.operationId) setPermission(request);
@@ -295,19 +365,6 @@ export function Workspace({
       if (eventKind.includes("job") || eventKind.includes("media") || eventKind.includes("export")) {
         const text = eventText(nextEvent);
         if (text) setNotice(text);
-        const eventStatus = stringValue(data.status || data.state).toLowerCase();
-        const terminal = eventKind.includes("completed") || eventKind.includes("ready") || eventKind.includes("failed") || eventKind.includes("cancelled")
-          || eventStatus === "completed" || eventStatus === "ready" || eventStatus === "failed" || eventStatus === "cancelled";
-        if (terminal && (eventKind.includes("job") || eventKind.includes("media"))) void refresh();
-      }
-      const assistantToolCompleted =
-        eventKind === "assistant_tool_end" &&
-        data.isError !== true &&
-        typeof data.error !== "string";
-      const assistantSettled =
-        eventKind === "assistant_settled" || eventKind === "assistant_end";
-      if (assistantToolCompleted || assistantSettled) {
-        void refresh().catch(() => undefined);
       }
     }).then((dispose) => {
       if (disposed) dispose();
@@ -319,7 +376,7 @@ export function Workspace({
       disposed = true;
       unlisten?.();
     };
-  }, [client, refresh]);
+  }, [activityStore, client, onTimeline, refresh, refreshedActivityRevisions]);
 
   useEffect(() => {
     const onMove = (event: PointerEvent) => {
@@ -573,9 +630,9 @@ export function Workspace({
               <button className={leftTab === "inspector" ? "pane-tab active" : "pane-tab"} role="tab" aria-selected={leftTab === "inspector"} type="button" onClick={() => setLeftTab("inspector")}><SlidersHorizontal aria-hidden="true" />Inspector</button>
             </div>
             <div className="pane-content">
-              {leftTab === "media" ? <MediaLibrary client={client} snapshot={snapshot} onRefresh={refresh} onNotice={setNotice} onImport={() => void projectCommand({ method: "media", params: { action: "import" } }).catch(() => undefined)} onInsert={(assetId) => appendAsset(assetId).catch((error) => setNotice(errorMessage(error)))} /> : null}
-              {leftTab === "transcript" ? <TranscriptPanel client={client} snapshot={snapshot} selection={selection} onEdit={commit} onRefresh={refresh} onNotice={setNotice} onSeek={(frame) => void updateSelection({ ...selection, playheadFrame: frame })} /> : null}
-              {leftTab === "inspector" ? <ClipInspector client={client} snapshot={snapshot} clip={selectedClip} track={activeTrack} transitions={selectedTransitions} selection={selection} onEdit={commit} onNotice={setNotice} /> : null}
+              {leftTab === "media" ? <MediaLibrary client={client} snapshot={snapshot} activityStore={activityStore} revealActivity={revealActivity} onRefresh={refresh} onNotice={setNotice} onImport={() => void projectCommand({ method: "media", params: { action: "import" } }).catch(() => undefined)} onInsert={(assetId) => appendAsset(assetId).catch((error) => setNotice(errorMessage(error)))} /> : null}
+              {leftTab === "transcript" ? <TranscriptPanel client={client} snapshot={snapshot} selection={selection} activityStore={activityStore} onEdit={commit} onRefresh={refresh} onNotice={setNotice} onSeek={(frame) => void updateSelection({ ...selection, playheadFrame: frame })} /> : null}
+              {leftTab === "inspector" ? <ClipInspector client={client} snapshot={snapshot} clip={selectedClip} track={activeTrack} transitions={selectedTransitions} selection={selection} activityStore={activityStore} revealActivity={revealActivity} onEdit={commit} onNotice={setNotice} /> : null}
             </div>
           </aside>
         ) : null}
@@ -587,13 +644,14 @@ export function Workspace({
           </div>
           <div className="preview-stage"><Preview client={client} snapshot={snapshot} selection={selection} playing={transportPlaying} onPlayingChange={handlePlayState} onFrameChange={handleFrameChange} onSelectionChange={updateSelection} onNotice={setNotice} /></div>
           <div className={isDraggingTimeline ? "resize-handle horizontal dragging" : "resize-handle horizontal"} role="separator" aria-label="Resize timeline" aria-orientation="horizontal" tabIndex={0} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); timelineResizeStart.current = { y: event.clientY, height: timelineHeight }; setIsDraggingTimeline(true); }} onKeyDown={(event) => { if (event.key === "ArrowUp") setTimelineHeight((height) => Math.min(520, height + 16)); if (event.key === "ArrowDown") setTimelineHeight((height) => Math.max(180, height - 16)); }} />
-          <section className="timeline-dock" aria-label="Timeline"><Timeline client={client} snapshot={snapshot} timeline={timeline} selection={selection} playheadStore={frameStore} onSelectionChange={updateSelection} onEdit={commit} onNotice={setNotice} /></section>
+          <section className="timeline-dock" aria-label="Timeline"><Timeline client={client} snapshot={snapshot} timeline={timeline} selection={selection} playheadStore={frameStore} activityStore={activityStore} revealActivity={revealActivity} onSelectionChange={updateSelection} onEdit={commit} onNotice={setNotice} /></section>
         </main>
 
         {rightOpen ? (
           <aside className="chat-pane" aria-label="Assistant chat">
             <div className={isDraggingChat ? "resize-handle vertical dragging" : "resize-handle vertical"} role="separator" aria-label="Resize assistant" aria-orientation="vertical" tabIndex={0} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); chatResizeStart.current = { x: event.clientX, width: panelWidth }; setIsDraggingChat(true); }} onKeyDown={(event) => { if (event.key === "ArrowLeft") setPanelWidth((width) => Math.min(520, width + 16)); if (event.key === "ArrowRight") setPanelWidth((width) => Math.max(280, width - 16)); }} />
-            <ChatPanel client={client} snapshot={snapshot} eventLog={eventLog} onRefresh={refresh} onNotice={setNotice} onProviderSettings={() => setProviderSettingsOpen(true)} />
+            <ActivityPanel client={client} store={activityStore} onReveal={setRevealActivity} />
+            <ChatPanel client={client} snapshot={snapshot} eventLog={eventLog} activityStore={activityStore} onRefresh={refresh} onNotice={setNotice} onProviderSettings={() => setProviderSettingsOpen(true)} />
           </aside>
         ) : <button className="collapsed-pane-button right" type="button" onClick={() => setRightOpen(true)} aria-label="Open assistant"><PanelRightOpen aria-hidden="true" /></button>}
       </div>

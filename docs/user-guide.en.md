@@ -555,7 +555,11 @@ If you want an operation without AI, use the manual controls described in Sectio
 6. If the run is unsafe, too broad, or simply no longer wanted, click **Stop**.
 7. If the conversation has become confusing, click **New assistant session**. This clears the assistant history for the current project scope; it does not undo committed editor changes.
 
-The chat shows **tool updates**, tool status, and failures. A failed tool is not evidence that a partial edit did or did not occur; refresh the project and inspect the actual revision before retrying.
+The chat shows assistant text and tool updates. **Activity → Native work** shows native operations, affected targets, confirmed project changes, approval waits, and background jobs. A returned job ID means work started, not that it completed. **Cancel** requests cancellation; the final state and any error come from the native job. **Stop** does not undo edits already committed.
+
+Activity highlights are separate from your selection. Reads briefly identify inspected targets; confirmed edits can show the affected range, an old clip position, or Inspector before/after values. Dry runs do not animate committed changes. Large changes use bounded highlights rather than animating every item. **Show** explicitly reveals a target outside the current view without selecting it or starting playback. Activity alone does not take your focus, scroll position, or playhead; reduced-motion preferences are respected.
+
+Explicit assistant play, pause, and seek requests use the visible player and wait for its acknowledgement. Inspection and other read-only tools do not restart playback. A confirmed time-range selection stays visible until another selection replaces it. Review the actual revision and native activity result before retrying a failed operation; a later cancellation does not mean an earlier commit was rolled back.
 
 ### 10.3 Provider settings
 

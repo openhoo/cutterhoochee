@@ -284,7 +284,8 @@ where
         state.require_active_run_at(caller.generation, run_id)?;
     }
     let spec = JobSpec::new(kind, JobPriority::Background, caller.generation, project_id)?
-        .with_run_id(run_id.clone());
+        .with_run_id(run_id.clone())
+        .with_activity_id(caller.activity_id.clone());
     let registry = state.jobs().registry();
     let state_for_worker = state.clone();
     let generation = caller.generation;

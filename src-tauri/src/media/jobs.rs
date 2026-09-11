@@ -89,11 +89,20 @@ pub struct JobSpec {
     pub generation: u64,
     pub project_id: Option<String>,
     pub run_id: Option<String>,
+    activity_id: Option<String>,
 }
 
 /// Called after a job's externally visible summary changes. Hooks run off the
 /// registry lock so native event publishers may safely query state again.
 pub type JobNotificationHook = Arc<dyn Fn(JobSummary, Option<Value>) + Send + Sync>;
+
+#[derive(Clone)]
+pub(crate) struct ActivityJobSnapshot {
+    pub summary: JobSummary,
+    pub activity_id: Option<String>,
+    pub cancellation_requested: bool,
+    pub committed_asset: Option<(String, u64)>,
+}
 
 /// Called for a worker's domain-specific metadata event (for example probe
 /// metadata). The callback is native-owned; callers never provide event data.
@@ -117,6 +126,7 @@ impl JobSpec {
             generation,
             project_id,
             run_id: None,
+            activity_id: None,
         })
     }
 
@@ -124,13 +134,20 @@ impl JobSpec {
         self.run_id = run_id;
         self
     }
+
+    pub(crate) fn with_activity_id(mut self, activity_id: Option<String>) -> Self {
+        self.activity_id = activity_id;
+        self
+    }
 }
 
 struct JobEntry {
     summary: JobSummary,
+    activity_id: Option<String>,
     cancel: Arc<AtomicBool>,
     process: Arc<Mutex<Option<u32>>>,
     result: Option<JobResult>,
+    committed_asset: Option<(String, u64)>,
 }
 
 struct RegistryState {
@@ -217,9 +234,11 @@ impl JobRegistry {
                 job_id.clone(),
                 JobEntry {
                     summary: summary.clone(),
+                    activity_id: spec.activity_id,
                     cancel: cancel.clone(),
                     process: process.clone(),
                     result: None,
+                    committed_asset: None,
                 },
             );
         }
@@ -253,6 +272,32 @@ impl JobRegistry {
             .collect();
         jobs.sort_by_key(|job| job.created_at_ms);
         jobs
+    }
+
+    pub(crate) fn activity_snapshot(
+        &self,
+        generation: u64,
+        project_id: Option<&str>,
+    ) -> Result<Vec<ActivityJobSnapshot>, AppError> {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| AppError::io("The job registry lock is unavailable"))?;
+        Ok(state
+            .entries
+            .values()
+            .filter(|entry| {
+                entry.summary.generation == generation
+                    && entry.summary.project_id.as_deref() == project_id
+            })
+            .map(|entry| ActivityJobSnapshot {
+                summary: entry.summary.clone(),
+                activity_id: entry.activity_id.clone(),
+                cancellation_requested: entry.cancel.load(Ordering::Acquire),
+                committed_asset: entry.committed_asset.clone(),
+            })
+            .collect())
     }
 
     pub fn get(&self, job_id: &str) -> Result<JobSummary, AppError> {
@@ -604,6 +649,31 @@ pub struct JobContext {
 impl JobContext {
     pub fn job_id(&self) -> &str {
         &self.job_id
+    }
+
+    pub(crate) fn record_asset_commit(
+        &self,
+        asset_id: String,
+        revision: u64,
+    ) -> Result<(), AppError> {
+        let summary = {
+            let mut state = self
+                .registry
+                .inner
+                .state
+                .lock()
+                .map_err(|_| AppError::io("The job registry lock is unavailable"))?;
+            let entry = state
+                .entries
+                .get_mut(&self.job_id)
+                .ok_or_else(|| invalid("Unknown job ID"))?;
+            entry.committed_asset = Some((asset_id, revision));
+            entry.summary.clone()
+        };
+        if let Some(hook) = self.notification_hook.as_ref() {
+            hook(summary, None);
+        }
+        Ok(())
     }
 
     pub fn is_cancelled(&self) -> bool {

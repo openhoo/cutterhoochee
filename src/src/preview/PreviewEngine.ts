@@ -4,6 +4,8 @@ import type {
   PreviewAudioReply,
   PreviewFrameReply,
   PreviewInspectFrame,
+  PreviewTransportCommand,
+  PreviewTransportCompletion,
   ProjectSnapshot,
   RenderPlan,
   RenderSegment,
@@ -51,6 +53,11 @@ export interface PreviewEngineOptions {
   readonly onState: (state: PreviewEngineState) => void;
 }
 
+interface PreviewIntentOptions {
+  readonly notifyNative?: boolean;
+  readonly intent?: number;
+}
+
 interface CachedImage {
   readonly source: CanvasImageSource;
   lastUsed: number;
@@ -83,6 +90,12 @@ interface SoftwareFrameWait {
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
   readonly timer: number | NodeJS.Timeout;
+}
+
+interface SoftwareFallbackRecovery {
+  readonly token: number;
+  readonly intent: number;
+  readonly promise: Promise<void>;
 }
 
 export interface SoftwarePreviewDimensions {
@@ -271,6 +284,7 @@ export class PreviewEngine {
   private readonly softwareImageUrls = new Map<CanvasImageSource, string>();
 
   private project: ProjectSnapshot | undefined;
+  private projectGeneration: number | undefined;
   private plan: RenderPlan | undefined;
   private artifactCacheScope: string | undefined;
   private quality: PreviewQuality = "auto";
@@ -282,6 +296,9 @@ export class PreviewEngine {
   private desiredPlaying = false;
   private disposed = false;
   private operation = 0;
+  private transportIntent = 0;
+  private activeTransportSequence: number | undefined;
+  private lastRemoteSequence = -1;
   private imageAccess = 0;
   private animationHandle: number | undefined;
   private stillTimer: ReturnType<typeof setTimeout> | undefined;
@@ -304,6 +321,7 @@ export class PreviewEngine {
   private readonly softwareInFlightSequences = new Set<number>();
   private readonly softwareRetiredSequences = new Set<number>();
   private softwareBusy = false;
+  private softwareRecovery: SoftwareFallbackRecovery | undefined;
 
 
   constructor(options: PreviewEngineOptions) {
@@ -338,9 +356,23 @@ export class PreviewEngine {
 
   async setProject(snapshot: ProjectSnapshot): Promise<void> {
     if (this.disposed) return;
-    const previousProjectId = this.project?.document.projectId;
+    const context = this.client.getContext();
+    const current = this.project;
+    if (
+      current
+      && this.projectGeneration === context.generation
+      && context.projectId === snapshot.document.projectId
+      && current.workspaceId === snapshot.workspaceId
+      && current.document.projectId === snapshot.document.projectId
+      && current.document.revision === snapshot.document.revision
+    ) {
+      return;
+    }
+    const previousProjectId = current?.document.projectId;
     const preserveFrame = previousProjectId === snapshot.document.projectId;
     const wasPlaying = this.desiredPlaying;
+    ++this.transportIntent;
+    this.activeTransportSequence = undefined;
     this.softwareFallbackActive = false;
     this.softwareBusy = false;
     this.stopAnimation();
@@ -350,6 +382,7 @@ export class PreviewEngine {
     this.audioClock.pause();
     const token = ++this.operation;
     this.project = snapshot;
+    this.projectGeneration = context.generation;
     this.plan = undefined;
     this.ensureArtifactScope();
     clearCanvasBackground(this.canvas, snapshot.document.profile.background);
@@ -388,8 +421,98 @@ export class PreviewEngine {
 
   }
 
-  async play(): Promise<void> {
+  getState(): PreviewEngineState {
+    return {
+      state: this.transport,
+      frame: this.frame,
+      durationFrames: this.plan?.durationFrames ?? 0,
+      quality: this.effectiveQuality(),
+    };
+  }
+
+  async applyTransportCommand(
+    command: PreviewTransportCommand,
+  ): Promise<PreviewTransportCompletion> {
+    const context = this.client.getContext();
+    const base = {
+      sequence: command.sequence,
+      projectId: command.projectId,
+      generation: command.generation,
+    };
+    const reject = (message: string): PreviewTransportCompletion => ({
+      ...base,
+      error: message,
+    });
+    if (
+      !Number.isSafeInteger(command.sequence)
+      || command.sequence < 0
+      || !Number.isSafeInteger(command.generation)
+      || command.generation < 0
+      || !Number.isSafeInteger(command.revision)
+      || command.revision < 0
+      || command.projectId !== context.projectId
+      || command.generation !== context.generation
+      || !this.project
+      || this.project.document.projectId !== command.projectId
+      || this.project.document.revision !== command.revision
+    ) {
+      return reject("The preview transport command belongs to a retired scope.");
+    }
+    if (command.sequence <= this.lastRemoteSequence) {
+      return reject("The preview transport command is stale.");
+    }
+    this.lastRemoteSequence = command.sequence;
+    if (command.action === "seek" && (typeof command.frame !== "number" || !Number.isSafeInteger(command.frame) || command.frame < 0)) {
+      return reject("The preview seek frame is invalid.");
+    }
+    const intent = ++this.transportIntent;
+    this.activeTransportSequence = command.sequence;
+    try {
+      if (command.action === "play") {
+        await this.play({ notifyNative: false, intent });
+      } else if (command.action === "pause") {
+        await this.pause({ notifyNative: false, intent });
+      } else {
+        await this.seek(command.frame as number, { notifyNative: false, intent });
+      }
+    } catch (error) {
+      if (this.activeTransportSequence === command.sequence) this.activeTransportSequence = undefined;
+      return reject(error instanceof Error ? error.message : "The visible preview rejected the command.");
+    }
+    if (this.activeTransportSequence === command.sequence) this.activeTransportSequence = undefined;
+    if (this.transportIntent !== intent) {
+      return reject("The preview transport was superseded by a newer intent.");
+    }
+    const state = this.getState();
+    const accepted = command.action === "play"
+      ? state.state === "playing"
+      : command.action === "pause"
+        ? !this.desiredPlaying && (state.state === "paused" || state.state === "ended")
+        : state.state !== "error" && state.state !== "buffering" && state.frame === Math.max(0, Math.min(Math.max(0, state.durationFrames - 1), command.frame as number));
+    return accepted
+      ? base
+      : reject("The visible preview did not accept the requested transport action.");
+  }
+
+  cancelTransportCommand(command: PreviewTransportCommand): void {
+    const context = this.client.getContext();
+    if (
+      this.disposed
+      || this.activeTransportSequence !== command.sequence
+      || command.projectId !== context.projectId
+      || command.generation !== context.generation
+    ) {
+      return;
+    }
+    ++this.transportIntent;
+    this.activeTransportSequence = undefined;
+    void this.pause({ notifyNative: false, intent: this.transportIntent });
+  }
+
+  async play(options: PreviewIntentOptions = {}): Promise<void> {
     if (this.disposed) return;
+    const intent = options.intent ?? ++this.transportIntent;
+    const notifyNative = options.notifyNative ?? true;
     if (!this.project) {
       this.fail(new Error("Open a project before playing preview."));
       return;
@@ -397,6 +520,9 @@ export class PreviewEngine {
     this.desiredPlaying = true;
     if (!this.plan) {
       await this.refresh();
+      if (notifyNative && this.transportIntent === intent && this.transport === "playing") {
+        await this.callPreview({ action: "play" });
+      }
       return;
     }
     this.cancelStill();
@@ -408,30 +534,55 @@ export class PreviewEngine {
       return;
     }
     if (this.transport === "ended") this.frame = 0;
+    const awaitFallbackRecovery = async (): Promise<boolean> => {
+      const recovery = this.softwareRecovery;
+      if (!recovery || recovery.token !== token || recovery.intent !== intent) return false;
+      try {
+        await recovery.promise;
+      } catch (recoveryError) {
+        if (this.isCurrent(token) && !isAbortError(recoveryError)) {
+          this.desiredPlaying = false;
+          this.fail(recoveryError);
+          throw recoveryError;
+        }
+        return true;
+      }
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return true;
+      if (this.transport !== "playing") return true;
+      if (notifyNative) await this.callPreview({ action: "play" });
+      if (this.softwareRecovery === recovery) this.softwareRecovery = undefined;
+      return true;
+    };
     try {
-      await this.callPreview({ action: "play" });
-      if (!this.isCurrent(token) || !this.desiredPlaying) return;
       if (this.effectiveQuality() === "software") await this.startSoftware(this.frame);
-      if (!this.isCurrent(token) || !this.desiredPlaying) return;
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
       await this.syncInputs(this.frame, true, token);
-      if (!this.isCurrent(token) || !this.desiredPlaying) return;
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
+      if (await awaitFallbackRecovery()) return;
       if (this.effectiveQuality() === "software") await this.awaitSoftwareFrame(token, this.frame);
-      if (!this.isCurrent(token) || !this.desiredPlaying) return;
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
+      if (await awaitFallbackRecovery()) return;
       const startSample = sampleAtFrame(this.frame, this.plan.fpsNum, this.plan.fpsDen);
       await this.audioClock.play(startSample);
-      if (!this.isCurrent(token) || !this.desiredPlaying) return;
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
+      if (await awaitFallbackRecovery()) return;
       this.startAnimation();
       if (this.transport !== "error") this.publish("playing", this.frame);
+      if (notifyNative) await this.callPreview({ action: "play" });
     } catch (error) {
+      if (this.isCurrent(token) && isAbortError(error) && await awaitFallbackRecovery()) return;
       if (this.isCurrent(token) && !isAbortError(error)) {
         this.desiredPlaying = false;
         this.fail(error);
+        throw error;
       }
     }
   }
 
-  pause(): void {
+  async pause(options: PreviewIntentOptions = {}): Promise<void> {
     if (this.disposed) return;
+    const intent = options.intent ?? ++this.transportIntent;
+    const notifyNative = options.notifyNative ?? true;
     const wasPlaying = this.desiredPlaying;
     this.desiredPlaying = false;
     ++this.operation;
@@ -441,7 +592,6 @@ export class PreviewEngine {
     this.videoPool.pause();
     if (wasPlaying) this.stopSoftware();
     this.softwareBusy = false;
-    void this.callPreview({ action: "pause" }).catch(() => undefined);
     if (this.plan) {
       this.drawApproximate();
       this.scheduleStill();
@@ -449,14 +599,18 @@ export class PreviewEngine {
     } else {
       this.publish("paused", this.frame);
     }
+    if (notifyNative && this.transportIntent === intent) await this.callPreview({ action: "pause" });
   }
 
-  async seek(frame: number): Promise<void> {
+  async seek(frame: number, options: PreviewIntentOptions = {}): Promise<void> {
     if (this.disposed) return;
     checkedFrame(frame, "frame");
+    const intent = options.intent ?? ++this.transportIntent;
+    const notifyNative = options.notifyNative ?? true;
     if (!this.plan) {
       this.frame = frame;
       this.publish(this.desiredPlaying ? "buffering" : "paused", frame);
+      if (notifyNative && this.transportIntent === intent) await this.callPreview({ action: "seek", frame });
       return;
     }
     const target = clampFrame(frame, this.plan.durationFrames);
@@ -475,21 +629,19 @@ export class PreviewEngine {
     }
     this.publish("buffering", target);
     try {
-      await this.callPreview({ action: "seek", frame: target });
-      if (!this.isCurrent(token)) return;
       await this.audioClock.seek(sampleAtFrame(target, this.plan.fpsNum, this.plan.fpsDen));
-      if (!this.isCurrent(token)) return;
+      if (!this.isCurrent(token) || this.transportIntent !== intent) return;
       await this.syncInputs(target, false, token);
-      if (!this.isCurrent(token)) return;
+      if (!this.isCurrent(token) || this.transportIntent !== intent) return;
       if (wasPlaying && this.desiredPlaying) {
         if (this.effectiveQuality() === "software") await this.startSoftware(target);
-        if (!this.isCurrent(token) || !this.desiredPlaying) return;
+        if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
         await this.syncInputs(target, true, token);
-        if (!this.isCurrent(token) || !this.desiredPlaying) return;
+        if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
         if (this.effectiveQuality() === "software") await this.awaitSoftwareFrame(token, target);
-        if (!this.isCurrent(token) || !this.desiredPlaying) return;
+        if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
         await this.audioClock.play(sampleAtFrame(target, this.plan.fpsNum, this.plan.fpsDen));
-        if (!this.isCurrent(token) || !this.desiredPlaying) return;
+        if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
         this.startAnimation();
         this.publish("playing", target);
       } else {
@@ -498,8 +650,12 @@ export class PreviewEngine {
         this.scheduleStill();
         this.publish("paused", target);
       }
+      if (notifyNative && this.transportIntent === intent) await this.callPreview({ action: "seek", frame: target });
     } catch (error) {
-      if (this.isCurrent(token) && !isAbortError(error)) this.fail(error);
+      if (this.isCurrent(token) && !isAbortError(error)) {
+        this.fail(error);
+        throw error;
+      }
     }
   }
 
@@ -570,6 +726,7 @@ export class PreviewEngine {
     this.artifactUrlPromises.clear();
     this.artifactCacheScope = undefined;
     this.project = undefined;
+    this.projectGeneration = undefined;
     this.plan = undefined;
   }
   private handleContextChange(): void {
@@ -581,6 +738,8 @@ export class PreviewEngine {
     this.softwareFallbackActive = false;
     this.softwareBusy = false;
     this.videoPool.pause();
+    ++this.transportIntent;
+    this.lastRemoteSequence = -1;
     this.audioClock.pause();
     ++this.operation;
     this.plan = undefined;
@@ -952,19 +1111,23 @@ export class PreviewEngine {
     this.publish("buffering", this.frame, error);
     if (this.softwareBusy) return;
     this.softwareBusy = true;
-    void this.startSoftware(this.frame)
-      .then(async () => {
-        if (!this.isCurrent(token) || !this.desiredPlaying || !this.plan) return;
-        await this.syncInputs(this.frame, true, token);
-        await this.awaitSoftwareFrame(token, this.frame);
-        if (!this.isCurrent(token) || !this.desiredPlaying || !this.plan) return;
-        await this.audioClock.play(sampleAtFrame(this.frame, this.plan.fpsNum, this.plan.fpsDen));
-        if (!this.isCurrent(token) || !this.desiredPlaying) return;
-        this.startAnimation();
-        this.publish("playing", this.frame);
-      })
+    const intent = this.transportIntent;
+    const recovery = (async (): Promise<void> => {
+      await this.startSoftware(this.frame);
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent || !this.plan) return;
+      await this.syncInputs(this.frame, true, token);
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
+      await this.awaitSoftwareFrame(token, this.frame);
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent || !this.plan) return;
+      await this.audioClock.play(sampleAtFrame(this.frame, this.plan.fpsNum, this.plan.fpsDen));
+      if (!this.isCurrent(token) || !this.desiredPlaying || this.transportIntent !== intent) return;
+      this.startAnimation();
+      this.publish("playing", this.frame);
+    })();
+    this.softwareRecovery = { token, intent, promise: recovery };
+    void recovery
       .catch((fallbackError: unknown) => {
-        if (this.isCurrent(token) && !isAbortError(fallbackError)) {
+        if (this.isCurrent(token) && this.transportIntent === intent && !isAbortError(fallbackError)) {
           this.fail(fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError)));
         }
       })

@@ -1,3 +1,4 @@
+use crate::activity::ActivityRegistry;
 use crate::agent_bridge::{
     AgentBridge, AgentPaths, BridgeLifecycle, PrivateRequestContext, PrivateRequestHandler,
 };
@@ -48,7 +49,9 @@ struct AppStateInner {
     evidence: EvidenceRuntime,
     permissions: PermissionsRuntime,
     credentials: CredentialsRuntime,
+    permission_events: Mutex<tokio::sync::broadcast::Receiver<crate::permissions::PermissionEvent>>,
     assistant: AssistantRuntime,
+    activity: ActivityRegistry,
 }
 
 /// Process-wide state shared by the Tauri command handler and the supervised
@@ -73,6 +76,8 @@ impl AppState {
         let media = MediaRuntime::new();
         let registry = media.jobs();
         let jobs = JobsRuntime::from_registry(registry.clone());
+        let permissions = PermissionsRuntime::new(permission_data_dir.clone())?;
+        let permission_events = Mutex::new(permissions.subscribe());
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 paths,
@@ -88,9 +93,11 @@ impl AppState {
                 render: RenderRuntime::new(),
                 export: ExportRuntime::from_registry(registry),
                 evidence: EvidenceRuntime::new(),
-                permissions: PermissionsRuntime::new(permission_data_dir.clone())?,
+                permissions,
+                permission_events,
                 credentials: CredentialsRuntime::new(permission_data_dir)?,
                 assistant: AssistantRuntime::new(),
+                activity: ActivityRegistry::new(),
             }),
         })
     }
@@ -219,6 +226,120 @@ impl AppState {
 
     pub fn assistant(&self) -> &AssistantRuntime {
         &self.inner.assistant
+    }
+
+    pub fn activity(&self) -> &ActivityRegistry {
+        &self.inner.activity
+    }
+
+    pub fn activity_snapshot_at(
+        &self,
+        generation: u64,
+        project_id: Option<&str>,
+    ) -> Result<Vec<crate::activity::AgentActivity>, AppError> {
+        self.validate_generation(generation)?;
+        let current_project = self.current_project_id();
+        if current_project.as_deref() != project_id {
+            return Err(AppError::stale_session(
+                "The activity snapshot belongs to a different project",
+            ));
+        }
+        let mut permission_events = Vec::new();
+        {
+            let mut receiver = self
+                .inner
+                .permission_events
+                .lock()
+                .map_err(|_| AppError::io("The permission activity listener is unavailable"))?;
+            loop {
+                match receiver.try_recv() {
+                    Ok(event) => permission_events.push(event),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        for event in permission_events {
+            use crate::permissions::PermissionEvent;
+            let updates = match event {
+                PermissionEvent::Requested(request) => self.inner.activity.approval_requested(
+                    request.scope.generation,
+                    request.scope.project_id.as_deref(),
+                    request.run_id.as_deref(),
+                    request.tool_call_id.as_deref(),
+                    &request.operation_id,
+                )?,
+                PermissionEvent::Decided(decision) => self
+                    .inner
+                    .activity
+                    .approval_decided(&decision.operation_id, decision.allow)?,
+                PermissionEvent::Revoked { operation_id } => {
+                    self.inner.activity.approval_revoked(&operation_id)?
+                }
+                PermissionEvent::EvidenceChanged(_) => Vec::new(),
+            };
+            for activity in updates {
+                self.emit_activity_update(&activity)?;
+            }
+        }
+        let activities = self.inner.activity.snapshot(generation, project_id)?;
+        if !activities.is_empty() {
+            let jobs = self
+                .jobs()
+                .registry()
+                .activity_snapshot(generation, project_id)?;
+            for activity in self
+                .inner
+                .activity
+                .reconcile_jobs(generation, project_id, &jobs)?
+            {
+                self.emit_activity_update(&activity)?;
+            }
+        }
+        self.validate_generation(generation)?;
+        self.inner.activity.snapshot(generation, project_id)
+    }
+
+    pub fn activity_start(
+        &self,
+        start: crate::activity::ActivityStart,
+    ) -> Result<
+        (
+            crate::activity::ActivityHandle,
+            crate::activity::AgentActivity,
+        ),
+        AppError,
+    > {
+        let (handle, activity) = self.inner.activity.start(start)?;
+        self.emit_activity_update(&activity)?;
+        Ok((handle, activity))
+    }
+
+    pub fn activity_patch(
+        &self,
+        handle: &crate::activity::ActivityHandle,
+        patch: crate::activity::ActivityPatch,
+    ) -> Result<Option<crate::activity::AgentActivity>, AppError> {
+        let activity = self.inner.activity.patch(handle, patch)?;
+        if let Some(activity) = &activity {
+            self.emit_activity_update(activity)?;
+        }
+        Ok(activity)
+    }
+
+    pub fn emit_activity_update(
+        &self,
+        activity: &crate::activity::AgentActivity,
+    ) -> Result<(), AppError> {
+        self.emit_sanitized_event(
+            "agent_activity",
+            activity.run_id.clone(),
+            Some(
+                serde_json::to_value(activity).map_err(|_| {
+                    AppError::schema("The native activity event could not be encoded")
+                })?,
+            ),
+        )
     }
 
     pub fn generation(&self) -> u64 {
@@ -625,6 +746,9 @@ impl AppState {
             run_id,
             data: sanitize_event_data(data),
         };
+        if event.kind.contains("_job_") {
+            let _ = self.activity_snapshot_at(event.generation, event.project_id.as_deref())?;
+        }
         let handle = self
             .inner
             .app_handle
@@ -650,6 +774,12 @@ impl AppState {
             return Err(AppError::stale_session(
                 "The bridge event belongs to a different project",
             ));
+        }
+        if event.event == "agent_activity"
+            || event.event.starts_with("preview_transport")
+            || event.event.ends_with("_cancel")
+        {
+            return Ok(());
         }
         self.emit_sanitized_event(
             event.event.clone(),
@@ -1968,7 +2098,7 @@ mod tests {
                 assert!(result.changed);
                 assert_eq!(result.revision, 2);
             }
-            other => panic!("unexpected edit reply: {other:?}"),
+            _ => panic!("unexpected edit reply variant"),
         }
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1987,7 +2117,7 @@ mod tests {
                 assert!(status.open);
                 assert_eq!(status.revision, Some(2));
             }
-            other => panic!("unexpected status reply: {other:?}"),
+            _ => panic!("unexpected status reply variant"),
         }
         let snapshot = runtime
             .block_on(dispatch(EditorRequest::ProjectSnapshot {}, caller, &state))
@@ -1997,7 +2127,7 @@ mod tests {
                 assert_eq!(snapshot.document.revision, 2);
                 assert_eq!(snapshot.document.clips.len(), 1);
             }
-            other => panic!("unexpected snapshot reply: {other:?}"),
+            _ => panic!("unexpected snapshot reply variant"),
         }
     }
     #[cfg(unix)]

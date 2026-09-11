@@ -424,7 +424,9 @@ Let us begin.
 <li>If the run is unsafe, too broad, or simply no longer wanted, click <strong>Stop</strong>.</li>
 <li>If the conversation has become confusing, click <strong>New assistant session</strong>. This clears the assistant history for the current project scope; it does not undo committed editor changes.</li>
 </ol>
-<p>The chat shows <strong>tool updates</strong>, tool status, and failures. A failed tool is not evidence that a partial edit did or did not occur; refresh the project and inspect the actual revision before retrying.</p>
+<p>The chat shows assistant text and tool updates. <strong>Activity → Native work</strong> shows native operations, affected targets, confirmed project changes, approval waits, and background jobs. A returned job ID means work started, not that it completed. <strong>Cancel</strong> requests cancellation; the final state and any error come from the native job. <strong>Stop</strong> does not undo edits already committed.</p>
+<p>Activity highlights are separate from your selection. Reads briefly identify inspected targets; confirmed edits can show the affected range, an old clip position, or Inspector before/after values. Dry runs do not animate committed changes. Large changes use bounded highlights rather than animating every item. <strong>Show</strong> explicitly reveals a target outside the current view without selecting it or starting playback. Activity alone does not take your focus, scroll position, or playhead; reduced-motion preferences are respected.</p>
+<p>Explicit assistant play, pause, and seek requests use the visible player and wait for its acknowledgement. Inspection and other read-only tools do not restart playback. A confirmed time-range selection stays visible until another selection replaces it. Review the actual revision and native activity result before retrying a failed operation; a later cancellation does not mean an earlier commit was rolled back.</p>
 <h3 id="103-provider-settings">10.3 Provider settings</h3>
 <p>Click the key icon in the chat intent or <strong>Provider settings</strong> in the top bar. The dialog contains:</p>
 <ul>

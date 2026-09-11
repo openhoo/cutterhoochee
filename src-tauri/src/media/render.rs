@@ -5,8 +5,9 @@
 //! RenderPlan.  Source media is decoded from managed normalized artifacts;
 //! no thumbnails or synthetic colors can satisfy a render request.
 
-use crate::editor::dispatcher::CallerContext;
+use crate::editor::dispatcher::{CallerContext, CallerKind};
 use crate::error::{AppError, ErrorCode};
+use crate::ipc::MAX_SAFE_INTEGER;
 use crate::media::ffmpeg::{decode_rgba_frame, read_f32_stereo_window, FfmpegToolchain};
 use crate::media::render_plan::{
     encode_rgba_png, sample_at_frame, ArtifactResolver, AudioSegment, AudioTransitionSide,
@@ -25,6 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::oneshot;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -160,7 +162,49 @@ pub struct SoftwarePreviewPacket {
     #[ts(type = "Uint8Array")]
     pub data: Vec<u8>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum PreviewTransportAction {
+    Play,
+    Pause,
+    Seek,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PreviewTransportCommand {
+    #[ts(type = "SafeInteger")]
+    pub sequence: u64,
+    pub project_id: String,
+    #[ts(type = "SafeInteger")]
+    pub generation: u64,
+    #[ts(type = "SafeInteger")]
+    pub revision: u64,
+    pub action: PreviewTransportAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "SafeInteger")]
+    pub frame: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct PreviewTransportCompletion {
+    #[ts(type = "SafeInteger")]
+    pub sequence: u64,
+    pub project_id: String,
+    #[ts(type = "SafeInteger")]
+    pub generation: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
 const SOFTWARE_PREVIEW_MAX_WIDTH: u32 = 960;
+const PREVIEW_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_TRANSPORT_ERROR_BYTES: usize = 2 * 1024;
 const SOFTWARE_PREVIEW_MAX_HEIGHT: u32 = 540;
 const SOFTWARE_PREVIEW_MAX_FPS_NUM: u128 = 30;
 
@@ -337,12 +381,20 @@ fn wait_for_software_target(
         thread::sleep(Duration::from_nanos(sleep_nanos as u64));
     }
 }
+struct PendingTransport {
+    command: PreviewTransportCommand,
+    sender: oneshot::Sender<PreviewTransportCompletion>,
+}
+
 struct RuntimeInner {
     artifacts: Mutex<Option<Arc<dyn ArtifactResolver>>>,
     toolchain: Mutex<FfmpegToolchain>,
     plan: Mutex<Option<RenderPlan>>,
     plan_generation: AtomicU64,
     transport_generation: AtomicU64,
+    transport_sequence: AtomicU64,
+    remote_intent_epoch: AtomicU64,
+    pending_transports: Mutex<HashMap<u64, PendingTransport>>,
     playing: AtomicBool,
     software: Mutex<Option<SoftwarePreviewSession>>,
     frame_cache: Mutex<RenderFrameArtifactCache>,
@@ -494,7 +546,7 @@ impl RenderFrameArtifactCache {
         {
             return;
         }
-        self.bytes += bytes;
+        self.bytes = self.bytes.saturating_add(bytes);
         self.entries.push_front(RenderFrameArtifactCacheEntry {
             key,
             artifact_id,
@@ -530,6 +582,9 @@ impl RenderRuntime {
                 plan: Mutex::new(None),
                 plan_generation: AtomicU64::new(0),
                 transport_generation: AtomicU64::new(0),
+                transport_sequence: AtomicU64::new(0),
+                remote_intent_epoch: AtomicU64::new(0),
+                pending_transports: Mutex::new(HashMap::new()),
                 playing: AtomicBool::new(false),
                 software: Mutex::new(None),
                 frame_cache: Mutex::new(RenderFrameArtifactCache::default()),
@@ -764,8 +819,15 @@ impl RenderRuntime {
         self.compile_current(state, generation)
     }
 
-    fn invalidate_transport(&self) {
+    fn invalidate_transport(&self, state: Option<&AppState>) {
         self.inner.playing.store(false, Ordering::Release);
+        self.inner
+            .remote_intent_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        let cancelled = self.cancel_pending_transports("Superseded by a newer preview intent");
+        if let Some(state) = state {
+            self.emit_transport_cancellations(state, &cancelled);
+        }
         let session = self.inner.software.lock().ok().and_then(|mut software| {
             self.inner
                 .transport_generation
@@ -775,6 +837,274 @@ impl RenderRuntime {
         if let Some(session) = session {
             session.stop();
         }
+    }
+    fn cancel_pending_transports(&self, message: &str) -> Vec<PreviewTransportCommand> {
+        let pending = self
+            .inner
+            .pending_transports
+            .lock()
+            .ok()
+            .map(|mut entries| {
+                entries
+                    .drain()
+                    .map(|(_, pending)| pending)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut commands = Vec::with_capacity(pending.len());
+        for pending in pending {
+            commands.push(pending.command.clone());
+            let _ = pending.sender.send(PreviewTransportCompletion {
+                sequence: pending.command.sequence,
+                project_id: pending.command.project_id,
+                generation: pending.command.generation,
+                error: Some(message.to_owned()),
+            });
+        }
+        commands
+    }
+
+    fn emit_transport_cancellations(&self, state: &AppState, commands: &[PreviewTransportCommand]) {
+        for command in commands {
+            let _ = state.emit_sanitized_event(
+                "preview_transport_cancel",
+                None,
+                Some(serde_json::to_value(command).unwrap_or_default()),
+            );
+        }
+    }
+
+    fn remove_pending_transport(&self, sequence: u64) {
+        if let Ok(mut pending) = self.inner.pending_transports.lock() {
+            pending.remove(&sequence);
+        }
+    }
+    fn retire_pending_transport(&self, state: &AppState, command: &PreviewTransportCommand) {
+        self.emit_transport_cancellations(state, std::slice::from_ref(command));
+        self.remove_pending_transport(command.sequence);
+    }
+
+    fn next_transport_sequence(&self) -> Result<u64, AppError> {
+        self.inner
+            .transport_sequence
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(1)
+                    .filter(|next| *next <= MAX_SAFE_INTEGER)
+            })
+            .map_err(|_| AppError::io("The preview transport sequence is exhausted"))
+    }
+
+    async fn request_transport(
+        &self,
+        action: PreviewTransportAction,
+        frame: Option<u64>,
+        plan: &RenderPlan,
+        caller: &CallerContext,
+        state: &AppState,
+    ) -> Result<(), AppError> {
+        if caller.project_id.as_deref() != Some(plan.project_id.as_str()) {
+            return Err(AppError::stale_session(
+                "The preview transport caller belongs to a different project",
+            ));
+        }
+        let intent_epoch = self.inner.remote_intent_epoch.load(Ordering::Acquire);
+        let sequence = self.next_transport_sequence()?;
+        let command = PreviewTransportCommand {
+            sequence,
+            project_id: plan.project_id.clone(),
+            generation: caller.generation,
+            revision: plan.revision,
+            action,
+            frame,
+        };
+        let cancelled =
+            self.cancel_pending_transports("Superseded by a newer preview transport command");
+        self.emit_transport_cancellations(state, &cancelled);
+        if self.inner.remote_intent_epoch.load(Ordering::Acquire) != intent_epoch {
+            return Err(AppError::stale_session(
+                "The preview transport was superseded by a newer human intent",
+            ));
+        }
+        let (sender, mut receiver) = oneshot::channel();
+        {
+            let mut pending = self
+                .inner
+                .pending_transports
+                .lock()
+                .map_err(|_| AppError::io("The preview transport lock is unavailable"))?;
+            pending.insert(
+                command.sequence,
+                PendingTransport {
+                    command: command.clone(),
+                    sender,
+                },
+            );
+        }
+        if self.inner.remote_intent_epoch.load(Ordering::Acquire) != intent_epoch {
+            self.retire_pending_transport(state, &command);
+            return Err(AppError::stale_session(
+                "The preview transport was superseded by a newer human intent",
+            ));
+        }
+        if let Err(error) = state.emit_sanitized_event(
+            "preview_transport",
+            caller.run_id().map(ToOwned::to_owned),
+            Some(serde_json::to_value(&command)?),
+        ) {
+            self.retire_pending_transport(state, &command);
+            return Err(error);
+        }
+
+        let deadline = Instant::now() + PREVIEW_TRANSPORT_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                self.retire_pending_transport(state, &command);
+                return Err(AppError::io(
+                    "The visible preview did not accept the transport command in time",
+                ));
+            }
+            tokio::select! {
+                result = &mut receiver => {
+                    let completion = result.map_err(|_| {
+                        AppError::stale_session("The preview transport request was retired")
+                    })?;
+                    if completion.sequence != command.sequence
+                        || completion.project_id != command.project_id
+                        || completion.generation != command.generation
+                    {
+                        return Err(AppError::stale_session(
+                            "The preview transport completion belongs to a different scope",
+                        ));
+                    }
+                    if let Some(error) = completion.error {
+                        let message = if error.len() > MAX_TRANSPORT_ERROR_BYTES {
+                            "The visible preview rejected the transport command".to_owned()
+                        } else {
+                            format!("The visible preview rejected the transport command: {error}")
+                        };
+                        return Err(AppError::new(ErrorCode::IoError, message));
+                    }
+                    let status = state.status()?;
+                    if status.generation != command.generation
+                        || status.project_id.as_deref() != Some(command.project_id.as_str())
+                        || status.revision != Some(command.revision)
+                        || self.inner.remote_intent_epoch.load(Ordering::Acquire) != intent_epoch
+                    {
+                        self.retire_pending_transport(state, &command);
+                        return Err(AppError::stale_session("The preview transport was superseded"));
+                    }
+                    if let Some(run_id) = caller.run_id() {
+                        state.require_active_run_at(caller.generation, run_id)?;
+                    }
+                    return Ok(());
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+            if self.inner.remote_intent_epoch.load(Ordering::Acquire) != intent_epoch {
+                self.retire_pending_transport(state, &command);
+                return Err(AppError::stale_session(
+                    "The preview transport was superseded by a newer human intent",
+                ));
+            }
+            if let Err(error) = state.validate_generation(caller.generation) {
+                self.retire_pending_transport(state, &command);
+                return Err(error);
+            }
+            let status = match state.status() {
+                Ok(status) => status,
+                Err(error) => {
+                    self.retire_pending_transport(state, &command);
+                    return Err(error);
+                }
+            };
+            if status.generation != command.generation
+                || status.project_id.as_deref() != Some(command.project_id.as_str())
+                || status.revision != Some(command.revision)
+            {
+                self.retire_pending_transport(state, &command);
+                return Err(AppError::stale_session(
+                    "The preview transport belongs to a retired project revision",
+                ));
+            }
+            if let Some(run_id) = caller.run_id() {
+                if let Err(error) = state.require_active_run_at(caller.generation, run_id) {
+                    self.retire_pending_transport(state, &command);
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    pub fn complete_transport(
+        &self,
+        completion: PreviewTransportCompletion,
+        state: &AppState,
+    ) -> Result<(), AppError> {
+        if completion.sequence > MAX_SAFE_INTEGER || completion.generation > MAX_SAFE_INTEGER {
+            return Err(AppError::invalid_argument(
+                "The preview transport completion is outside the safe range",
+            ));
+        }
+        if completion.project_id.is_empty() || completion.project_id.len() > 256 {
+            return Err(AppError::invalid_argument(
+                "The preview transport completion project is invalid",
+            ));
+        }
+        if completion
+            .error
+            .as_ref()
+            .is_some_and(|error| error.is_empty() || error.len() > MAX_TRANSPORT_ERROR_BYTES)
+        {
+            return Err(AppError::invalid_argument(
+                "The preview transport completion error is invalid",
+            ));
+        }
+        let command = {
+            let pending = self
+                .inner
+                .pending_transports
+                .lock()
+                .map_err(|_| AppError::io("The preview transport lock is unavailable"))?;
+            pending
+                .get(&completion.sequence)
+                .map(|entry| entry.command.clone())
+                .ok_or_else(|| {
+                    AppError::stale_session(
+                        "The preview transport completion has no pending command",
+                    )
+                })?
+        };
+        if command.project_id != completion.project_id
+            || command.generation != completion.generation
+        {
+            return Err(AppError::stale_session(
+                "The preview transport completion belongs to a different scope",
+            ));
+        }
+        state.validate_generation(command.generation)?;
+        let status = state.status()?;
+        if status.generation != command.generation
+            || status.project_id.as_deref() != Some(command.project_id.as_str())
+            || status.revision != Some(command.revision)
+        {
+            self.retire_pending_transport(state, &command);
+            return Err(AppError::stale_session(
+                "The preview transport command belongs to a retired project revision",
+            ));
+        }
+        let pending = self
+            .inner
+            .pending_transports
+            .lock()
+            .map_err(|_| AppError::io("The preview transport lock is unavailable"))?
+            .remove(&completion.sequence)
+            .ok_or_else(|| {
+                AppError::stale_session("The preview transport command was already retired")
+            })?;
+        pending.sender.send(completion).map_err(|_| {
+            AppError::stale_session("The preview transport request is no longer waiting")
+        })
     }
 
     /// Unified native preview handler.  NativeGlue supplies the trusted caller
@@ -857,25 +1187,65 @@ impl RenderRuntime {
                         "The requested seek frame is outside the project",
                     ));
                 }
-                self.invalidate_transport();
+                if matches!(&caller.kind, CallerKind::AgentSidecar { .. }) {
+                    self.request_transport(
+                        PreviewTransportAction::Seek,
+                        Some(frame),
+                        &plan,
+                        caller,
+                        state,
+                    )
+                    .await?;
+                } else {
+                    self.invalidate_transport(Some(state));
+                }
                 Ok(PreviewReply::Ack {
                     revision: plan.revision,
                     plan_hash: plan.plan_hash,
                 })
             }
             PreviewAction::Play {} => {
-                self.inner.playing.store(true, Ordering::Release);
                 let snapshot = state.snapshot_at(generation)?;
                 let plan = self.current_plan(state, generation, snapshot.document.revision)?;
+                if matches!(&caller.kind, CallerKind::AgentSidecar { .. }) {
+                    self.request_transport(
+                        PreviewTransportAction::Play,
+                        None,
+                        &plan,
+                        caller,
+                        state,
+                    )
+                    .await?;
+                } else {
+                    self.inner
+                        .remote_intent_epoch
+                        .fetch_add(1, Ordering::AcqRel);
+                    let cancelled = self
+                        .cancel_pending_transports("Superseded by a newer human preview intent");
+                    self.emit_transport_cancellations(state, &cancelled);
+                }
+                self.inner.playing.store(true, Ordering::Release);
                 Ok(PreviewReply::Ack {
                     revision: plan.revision,
                     plan_hash: plan.plan_hash,
                 })
             }
             PreviewAction::Pause {} => {
-                self.inner.playing.store(false, Ordering::Release);
                 let snapshot = state.snapshot_at(generation)?;
                 let plan = self.current_plan(state, generation, snapshot.document.revision)?;
+                if matches!(&caller.kind, CallerKind::AgentSidecar { .. }) {
+                    self.request_transport(
+                        PreviewTransportAction::Pause,
+                        None,
+                        &plan,
+                        caller,
+                        state,
+                    )
+                    .await?;
+                } else {
+                    self.invalidate_transport(Some(state));
+                }
+                self.inner.playing.store(false, Ordering::Release);
                 Ok(PreviewReply::Ack {
                     revision: plan.revision,
                     plan_hash: plan.plan_hash,
@@ -903,7 +1273,6 @@ impl RenderRuntime {
             }
         }
     }
-
     /// Start a persistent FFmpeg image2pipe worker.  The worker owns one
     /// bounded queue and one encoder process for its entire seek generation;
     /// visual frames are paced by the queue and stale sequences are dropped
@@ -1038,7 +1407,7 @@ impl RenderRuntime {
     /// closed or replaced.  In particular, stop the software worker before
     /// dropping its artifact resolver so no stale packets can escape.
     pub fn retire_project(&self) -> Result<(), AppError> {
-        self.invalidate_transport();
+        self.invalidate_transport(None);
         self.inner.plan_generation.store(0, Ordering::Release);
         *self
             .inner

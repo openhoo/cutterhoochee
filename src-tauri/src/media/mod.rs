@@ -532,7 +532,8 @@ impl MediaRuntime {
                 generation,
                 Some(project_id.clone()),
             )?
-            .with_run_id(run_id.clone());
+            .with_run_id(run_id.clone())
+            .with_activity_id(caller.activity_id.clone());
             let job = match self.jobs.submit_with_hooks(
                 spec,
                 Some(notification),
@@ -592,13 +593,19 @@ impl MediaRuntime {
                         if let Some(existing) = existing {
                             prepared.asset = existing;
                         } else {
-                            state_for_job.commit_asset_at(
+                            let receipt = state_for_job.commit_asset_at(
                                 generation,
                                 run_id_for_job.as_deref(),
                                 Uuid::new_v4().to_string(),
                                 prepared.asset.clone(),
                                 None,
                             )?;
+                            if receipt.changed {
+                                context.record_asset_commit(
+                                    prepared.asset.id.clone(),
+                                    receipt.revision,
+                                )?;
+                            }
                         }
                         {
                             if let Ok(mut pending_entries) = pending_for_job.lock() {
@@ -714,7 +721,8 @@ impl MediaRuntime {
             generation,
             Some(project_id.clone()),
         )?
-        .with_run_id(run_id.clone());
+        .with_run_id(run_id.clone())
+        .with_activity_id(caller.activity_id.clone());
         let job = match self.jobs.submit_with_hooks(
             spec,
             Some(notification),
@@ -753,13 +761,16 @@ impl MediaRuntime {
                     if let Some(run_id) = run_id_for_job.as_deref() {
                         permissions.require_active_run(generation, Some(&project_id), run_id)?;
                     }
-                    state_for_job.commit_asset_at(
+                    let receipt = state_for_job.commit_asset_at(
                         generation,
                         run_id_for_job.as_deref(),
                         Uuid::new_v4().to_string(),
                         prepared.asset.clone(),
                         Some(asset_id_for_job.clone()),
                     )?;
+                    if receipt.changed {
+                        context.record_asset_commit(prepared.asset.id.clone(), receipt.revision)?;
+                    }
                     serde_json::to_value(prepared)
                         .map_err(|_| AppError::schema("The relinked asset could not be encoded"))
                 })();

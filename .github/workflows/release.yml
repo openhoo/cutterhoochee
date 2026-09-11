@@ -310,7 +310,7 @@ jobs:
             clang cmake ninja openssl pkgconf patchelf \
             webkit2gtk-4.1 libappindicator-gtk3 librsvg \
             gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav \
-            pipewire vulkan-headers ffmpeg x264
+            pipewire vulkan-headers ffmpeg x264 xdg-utils
           test "$(pacman -Q ffmpeg)" = 'ffmpeg 2:9.0.1-1'
           test "$(pacman -Q x264)" = 'x264 3:0.165.r3222.b35605a-2'
       - name: Checkout immutable release tag

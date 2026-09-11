@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod agent_bridge;
 pub mod assistant;
 pub mod credentials;
@@ -73,9 +74,40 @@ pub fn run() {
             preview_software_subscribe,
             preview_software_ack,
             preview_software_cancel,
+            agent_activity_snapshot,
+            preview_transport_complete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Cutterhoochee");
+}
+
+#[tauri::command]
+fn agent_activity_snapshot(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    generation: u64,
+    project_id: Option<String>,
+) -> Result<Vec<activity::AgentActivity>, AppError> {
+    if window.label() != "main" {
+        return Err(AppError::invalid_argument(
+            "Activity is only available in the editor window",
+        ));
+    }
+    state.activity_snapshot_at(generation, project_id.as_deref())
+}
+
+#[tauri::command]
+fn preview_transport_complete(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    completion: media::render::PreviewTransportCompletion,
+) -> Result<(), AppError> {
+    if window.label() != "main" {
+        return Err(AppError::invalid_argument(
+            "Only the editor window can acknowledge playback",
+        ));
+    }
+    state.render().complete_transport(completion, &state)
 }
 
 async fn handle_native_drop(label: String, paths: Vec<PathBuf>, state: AppState) {

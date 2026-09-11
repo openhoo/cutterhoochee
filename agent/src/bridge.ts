@@ -48,6 +48,8 @@ export type BridgeRequestMessage = {
   projectId: string | null;
   generation: number;
   runId?: string;
+  /** Native-only correlation for the originating Pi tool call. */
+  toolCallId?: string;
   kind: "request";
   method: string;
   params: unknown;
@@ -60,6 +62,7 @@ export type BridgeResponseMessage =
       projectId: string | null;
       generation: number;
       runId?: string;
+      toolCallId?: string;
       kind: "response";
       ok: true;
       data: unknown;
@@ -70,6 +73,7 @@ export type BridgeResponseMessage =
       projectId: string | null;
       generation: number;
       runId?: string;
+      toolCallId?: string;
       kind: "response";
       ok: false;
       error: {
@@ -85,6 +89,7 @@ export type BridgeEventMessage = {
   projectId: string | null;
   generation: number;
   runId?: string;
+  toolCallId?: string;
   kind: "event";
   event: string;
   data?: unknown;
@@ -103,6 +108,7 @@ type IncomingRequestHandler = (
 type PendingRequest = {
   generation: number;
   runId?: string;
+  toolCallId?: string;
   resolve: (response: BridgeResponseMessage) => void;
   reject: (error: BridgeProtocolError) => void;
   timer?: NodeJS.Timeout;
@@ -112,6 +118,7 @@ export interface NdjsonBridgeOptions {
   generation?: number;
   projectId?: string | null;
   runId?: string;
+  toolCallId?: string;
   methods?: readonly string[];
   privateMethods?: readonly string[];
   handleRequest?: IncomingRequestHandler;
@@ -119,6 +126,7 @@ export interface NdjsonBridgeOptions {
   createId?: () => string;
   diagnostic?: (code: string) => void;
 }
+
 
 export class BridgeProtocolError extends Error {
   readonly code: EditorErrorCode;
@@ -154,7 +162,7 @@ export class NdjsonBridge {
   private _generation: number;
   private _projectId: string | null;
   private readonly runId?: string;
-
+  private readonly toolCallId?: string;
   constructor(input: Readable, output: Writable, options: NdjsonBridgeOptions = {}) {
     this.input = input;
     this.output = output;
@@ -173,6 +181,7 @@ export class NdjsonBridge {
     this._generation = options.generation ?? 0;
     this._projectId = options.projectId ?? null;
     this.runId = options.runId;
+    this.toolCallId = options.toolCallId;
     this.diagnostic = options.diagnostic ?? (() => undefined);
     if (!isSafeInteger(this._generation) || this._generation < 0) {
       throw new BridgeProtocolError(
@@ -226,7 +235,6 @@ export class NdjsonBridge {
       }
     }
   }
-
   request(
     method: string,
     params: unknown,
@@ -234,6 +242,7 @@ export class NdjsonBridge {
       projectId?: string | null;
       generation?: number;
       runId?: string;
+      toolCallId?: string;
       timeoutMs?: number;
       id?: string;
     } = {},
@@ -272,7 +281,6 @@ export class NdjsonBridge {
         ),
       );
     }
-
     const message: BridgeRequestMessage = {
       v: IPC_VERSION,
       id,
@@ -286,12 +294,18 @@ export class NdjsonBridge {
           ? {}
           : { runId: this.runId }
         : { runId: options.runId }),
+      ...(options.toolCallId === undefined
+        ? this.toolCallId === undefined
+          ? {}
+          : { toolCallId: this.toolCallId }
+        : { toolCallId: options.toolCallId }),
     };
 
     return new Promise<BridgeResponseMessage>((resolve, reject) => {
       const pending: PendingRequest = {
         generation,
         ...(message.runId === undefined ? {} : { runId: message.runId }),
+        ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
         resolve,
         reject,
       };
@@ -329,7 +343,7 @@ export class NdjsonBridge {
   event(
     event: string,
     data?: unknown,
-    options: { runId?: string; projectId?: string | null; generation?: number } = {},
+    options: { runId?: string; toolCallId?: string; projectId?: string | null; generation?: number } = {},
   ): void {
     if (this.closed) {
       throw new BridgeProtocolError("STALE_SESSION", "The bridge is closed.");
@@ -360,6 +374,11 @@ export class NdjsonBridge {
           ? {}
           : { runId: this.runId }
         : { runId: options.runId }),
+      ...(options.toolCallId === undefined
+        ? this.toolCallId === undefined
+          ? {}
+          : { toolCallId: this.toolCallId }
+        : { toolCallId: options.toolCallId }),
       ...(data === undefined ? {} : { data }),
     };
     this.writeMessage(message);
@@ -467,6 +486,11 @@ export class NdjsonBridge {
       (typeof object.projectId !== "string" && object.projectId !== null) ||
       !isSafeInteger(object.generation) ||
       object.generation < 0 ||
+      (object.toolCallId !== undefined &&
+        (typeof object.toolCallId !== "string" ||
+          object.toolCallId.length === 0 ||
+          object.toolCallId.length > 256 ||
+          /[\r\n]/.test(object.toolCallId))) ||
       typeof object.kind !== "string"
     ) {
       this.sendValidationError(object);
@@ -558,6 +582,7 @@ export class NdjsonBridge {
         ok: true,
         data,
         ...(request.runId === undefined ? {} : { runId: request.runId }),
+        ...(request.toolCallId === undefined ? {} : { toolCallId: request.toolCallId }),
       });
     } catch (error) {
       if (this.closed || controller.signal.aborted || request.generation !== this._generation) {
@@ -576,6 +601,7 @@ export class NdjsonBridge {
           message: bridgeError.message,
         },
         ...(request.runId === undefined ? {} : { runId: request.runId }),
+        ...(request.toolCallId === undefined ? {} : { toolCallId: request.toolCallId }),
       });
     } finally {
       this.incoming.delete(request.id);
@@ -620,11 +646,26 @@ export class NdjsonBridge {
       );
       return;
     }
+    if (response.toolCallId !== pending.toolCallId) {
+      pending.reject(
+        new BridgeProtocolError(
+          "STALE_SESSION",
+          "The response belongs to another tool call.",
+        ),
+      );
+      return;
+    }
     pending.resolve(response);
   }
 
   private handleIncomingEvent(event: BridgeEventMessage): void {
-    if (event.generation !== this._generation || event.projectId !== this._projectId) {
+    if (
+      event.generation !== this._generation ||
+      event.projectId !== this._projectId ||
+      (event.toolCallId !== undefined &&
+        event.toolCallId !== this.toolCallId &&
+        this.toolCallId !== undefined)
+    ) {
       this.diagnostic("STALE_SESSION");
       return;
     }
@@ -660,6 +701,8 @@ export class NdjsonBridge {
       typeof incoming.projectId === "string" || incoming.projectId === null
         ? incoming.projectId
         : this._projectId;
+    const toolCallId =
+      typeof incoming.toolCallId === "string" ? incoming.toolCallId : undefined;
     try {
       this.writeMessage({
         v: IPC_VERSION,
@@ -669,6 +712,7 @@ export class NdjsonBridge {
         kind: "response",
         ok: false,
         error: { code, message },
+        ...(toolCallId === undefined ? {} : { toolCallId }),
       });
     } catch {
       this.failProtocol("Unable to write bridge validation response.");

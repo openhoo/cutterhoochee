@@ -611,6 +611,9 @@ pub struct BridgeEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub run_id: Option<String>,
+    #[serde(rename = "toolCallId", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tool_call_id: Option<String>,
     #[serde(flatten)]
     #[ts(flatten)]
     pub body: BridgeMessage,
@@ -630,6 +633,7 @@ impl BridgeEnvelope {
             project_id,
             generation,
             run_id,
+            tool_call_id: None,
             body: BridgeMessage::Request {
                 method: request.method().to_owned(),
                 params: request.params(),
@@ -664,6 +668,7 @@ impl BridgeEnvelope {
             project_id: request.project_id.clone(),
             generation: request.generation,
             run_id: request.run_id.clone(),
+            tool_call_id: request.tool_call_id.clone(),
             body,
         }
     }
@@ -681,6 +686,7 @@ impl BridgeEnvelope {
             id,
             project_id,
             generation,
+            tool_call_id: None,
             run_id,
             body: BridgeMessage::Event { event, data },
         }
@@ -717,6 +723,18 @@ pub fn validate_envelope(envelope: &BridgeEnvelope) -> Result<(), AppError> {
             || run_id.contains('\n')
     }) {
         return Err(AppError::invalid_argument("Bridge run id is invalid"));
+    }
+    if envelope
+        .tool_call_id
+        .as_deref()
+        .is_some_and(|tool_call_id| {
+            tool_call_id.is_empty()
+                || tool_call_id.len() > MAX_BRIDGE_ID_BYTES
+                || tool_call_id.contains('\r')
+                || tool_call_id.contains('\n')
+        })
+    {
+        return Err(AppError::invalid_argument("Bridge tool call id is invalid"));
     }
     validate_safe_integer(envelope.generation, "generation")?;
 

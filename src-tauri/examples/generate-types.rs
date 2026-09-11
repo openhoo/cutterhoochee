@@ -21,6 +21,7 @@ export type IpcEnvelopeBase = {
   projectId: string | null,
   generation: SafeInteger,
   runId?: string,
+  toolCallId?: string,
 };
 
 export type EditorRequestEnvelope = IpcEnvelopeBase & EditorRequest & {
@@ -106,6 +107,9 @@ fn visit_auxiliary_roots(visitor: &mut DeclarationCollector) {
     visitor.visit::<SrtCue>();
     visitor.visit::<TranscribeRequest>();
     visitor.visit::<SoftwarePreviewPacket>();
+    visitor.visit::<cutterhoochee_lib::activity::AgentActivity>();
+    visitor.visit::<cutterhoochee_lib::media::render::PreviewTransportCommand>();
+    visitor.visit::<cutterhoochee_lib::media::render::PreviewTransportCompletion>();
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

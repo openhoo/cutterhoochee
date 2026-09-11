@@ -145,7 +145,8 @@ export class BridgeEditorPort implements AgentEditorPort {
 
   clientFor(toolCallId: string, signal?: AbortSignal, nativeRunId?: string): EditorClient {
     const transport: EditorTransport = {
-      call: async (request) => this.callEditor(request, { signal, runId: nativeRunId }),
+      call: async (request) =>
+        this.callEditor(request, { signal, runId: nativeRunId, toolCallId }),
       readArtifact: async (artifactId, range, context) =>
         this.readEvidenceArtifact(
           artifactId,
@@ -153,6 +154,7 @@ export class BridgeEditorPort implements AgentEditorPort {
           context === undefined ? this.bridge.projectId : context.projectId,
           context === undefined ? this.bridge.generation : context.generation,
           context?.runId ?? nativeRunId,
+          toolCallId,
           signal,
         ),
     };
@@ -169,7 +171,7 @@ export class BridgeEditorPort implements AgentEditorPort {
 
   async callEditor(
     request: EditorRequest,
-    options: { signal?: AbortSignal; runId?: string } = {},
+    options: { signal?: AbortSignal; runId?: string; toolCallId?: string } = {},
   ): Promise<EditorReply> {
     const response = await this.call(request.method, request.params, options);
     if (!isEditorReply(response)) {
@@ -178,11 +180,16 @@ export class BridgeEditorPort implements AgentEditorPort {
     return response;
   }
 
-  private async call(method: string, params: unknown, options: { signal?: AbortSignal; runId?: string }): Promise<unknown> {
+  private async call(
+    method: string,
+    params: unknown,
+    options: { signal?: AbortSignal; runId?: string; toolCallId?: string },
+  ): Promise<unknown> {
     const pending = this.bridge.request(method, params, {
       projectId: this.bridge.projectId,
       generation: this.bridge.generation,
       ...(options.runId === undefined ? {} : { runId: options.runId }),
+      ...(options.toolCallId === undefined ? {} : { toolCallId: options.toolCallId }),
     });
     const response = options.signal === undefined
       ? await pending
@@ -202,6 +209,9 @@ export class BridgeEditorPort implements AgentEditorPort {
     if (options.runId !== undefined && response.runId !== options.runId) {
       throw new BridgeProtocolError("STALE_SESSION", "The response belongs to another assistant run.");
     }
+    if (options.toolCallId !== undefined && response.toolCallId !== options.toolCallId) {
+      throw new BridgeProtocolError("STALE_SESSION", "The response belongs to another tool call.");
+    }
     return response.data;
   }
 
@@ -211,6 +221,7 @@ export class BridgeEditorPort implements AgentEditorPort {
     projectId: string | null,
     generation: number,
     runId: string | undefined,
+    toolCallId: string,
     signal: AbortSignal | undefined,
   ): Promise<Uint8Array> {
     if (!/^[A-Za-z0-9._-]{1,256}$/.test(artifactId)) {
@@ -260,7 +271,7 @@ export class BridgeEditorPort implements AgentEditorPort {
         ...(evidenceRange?.length === undefined ? {} : { length: evidenceRange.length }),
         ...(hasSizingOptions ? { maxEdge, maxBytes } : {}),
       },
-      { signal, runId },
+      { signal, runId, toolCallId },
     );
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new BridgeProtocolError("SCHEMA_UNSUPPORTED", "The native evidence image response is invalid.");

@@ -2,10 +2,11 @@ import type * as React from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Lock, Magnet, Plus, Scissors, SlidersHorizontal, Volume2, VolumeX } from "lucide-react";
 
-import type { EditOp, EditorClient, MediaClip, ProjectSnapshot, TextItem, TimelineSelection, TimelineSnapshot, Track } from "@cutterhoochee/shared";
+import type { ActivityGeometry, ActivityTarget, AgentActivity, EditOp, EditorClient, MediaClip, ProjectSnapshot, TextItem, TimelineSelection, TimelineSnapshot, Track, Transition } from "@cutterhoochee/shared";
 import { callNative, formatDuration, formatTimecode, numberValue, record, replyPayload, stringValue, transitionRemovalOps } from "@/lib/native";
 import { Button } from "@/components/ui/button";
 import { PlaybackFrameStore, usePlaybackFrame } from "@/components/PlaybackFrameStore";
+import { useAgentActivities, type ActivityReveal, type AgentActivityStore } from "@/activity/AgentActivityStore";
 
 export type TimelineProps = {
   client: EditorClient;
@@ -13,6 +14,8 @@ export type TimelineProps = {
   timeline: TimelineSnapshot | null;
   selection: TimelineSelection;
   playheadStore?: PlaybackFrameStore;
+  activityStore: AgentActivityStore;
+  revealActivity?: ActivityReveal | null;
   onSelectionChange: (selection: TimelineSelection) => Promise<void>;
   onEdit: (label: string, operations: readonly EditOp[]) => Promise<void>;
   onNotice: (notice: string) => void;
@@ -43,6 +46,14 @@ type VisibleText = {
   durationFrames: number;
   sourceStartFrame?: number;
 };
+type ActivityOverlay = {
+  key: string;
+  kind: "attention" | "committed" | "ghost";
+  trackId: string;
+  startFrame: number;
+  durationFrames: number;
+  label: string;
+};
 
 const TRACK_ROW_HEIGHT = 58;
 const RULER_HEIGHT = 30;
@@ -60,8 +71,99 @@ const MEDIA_REQUEST_CONCURRENCY = 3;
 const MAX_REQUESTED_MEDIA_KEYS = 4096;
 const MAX_WAVEFORM_BYTES = 2 * 1024 * 1024;
 const MAX_WAVEFORM_BARS = 512;
+const MAX_ACTIVITY_ENTRIES = 48;
+const MAX_ACTIVITY_TARGETS = 64;
+const MAX_ACTIVITY_OVERLAYS = 32;
+const ACTIVITY_TRANSIENT_MS = 1800;
 
-export const Timeline = memo(function Timeline({ client, snapshot, timeline, selection, playheadStore, onSelectionChange, onEdit, onNotice }: TimelineProps) {
+function activityIdentity(activity: AgentActivity): string {
+  return `${activity.id}:${activity.sequence}`;
+}
+
+function activityIsCommitted(activity: AgentActivity): boolean {
+  return activity.origin === "agent" && activity.phase === "completed" && activity.changed && !activity.dryRun;
+}
+
+function activityIsVisibleAttention(activity: AgentActivity): boolean {
+  return activity.origin === "agent" && activity.phase !== "failed" && activity.phase !== "cancelled";
+}
+
+function validActivityFrame(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function activityGeometryRange(geometry: ActivityGeometry | undefined, fallbackTrackId?: string): { trackId?: string; startFrame: number; durationFrames: number } | undefined {
+  if (!geometry || !validActivityFrame(geometry.startFrame) || !Number.isSafeInteger(geometry.durationFrames) || geometry.durationFrames <= 0) return undefined;
+  return { trackId: geometry.trackId ?? fallbackTrackId, startFrame: geometry.startFrame, durationFrames: geometry.durationFrames };
+}
+
+function targetRange(
+  target: ActivityTarget,
+  clipById: ReadonlyMap<string, MediaClip>,
+  textById: ReadonlyMap<string, VisibleText>,
+  transitionById: ReadonlyMap<string, Transition>,
+): { trackId?: string; startFrame: number; durationFrames: number } | undefined {
+  if (target.space === "source") return undefined;
+  const explicit = validActivityFrame(target.startFrame) && validActivityFrame(target.endFrame) && target.endFrame > target.startFrame
+    ? { trackId: target.trackId, startFrame: target.startFrame, durationFrames: target.endFrame - target.startFrame }
+    : undefined;
+  if (explicit) return explicit;
+  if (target.kind === "clip") {
+    const clip = clipById.get(target.id);
+    return clip ? { trackId: target.trackId ?? clip.trackId, startFrame: clip.startFrame, durationFrames: clip.durationFrames } : undefined;
+  }
+  if (target.kind === "text") {
+    const text = textById.get(target.id);
+    return text ? { trackId: target.trackId ?? text.item.trackId, startFrame: text.startFrame, durationFrames: text.durationFrames } : undefined;
+  }
+  if (target.kind === "transition") {
+    const transition = transitionById.get(target.id);
+    const left = transition ? clipById.get(transition.leftClipId) : undefined;
+    const right = transition ? clipById.get(transition.rightClipId) : undefined;
+    if (transition && left && right && left.trackId === right.trackId) {
+      const startFrame = Math.max(left.startFrame + left.durationFrames - transition.durationFrames, right.startFrame);
+      return { trackId: target.trackId ?? left.trackId, startFrame, durationFrames: transition.durationFrames };
+    }
+  }
+  return undefined;
+}
+
+function useExpiredActivityKeys(keys: readonly string[]): ReadonlySet<string> {
+  const signature = keys.join("\u001f");
+  const [expired, setExpired] = useState<ReadonlySet<string>>(() => new Set());
+  const deadlines = useRef(new Map<string, number>());
+  useEffect(() => {
+    const activeKeys = new Set(keys);
+    const now = performance.now();
+    for (const key of deadlines.current.keys()) if (!activeKeys.has(key)) deadlines.current.delete(key);
+    for (const key of keys) if (!deadlines.current.has(key)) deadlines.current.set(key, now + ACTIVITY_TRANSIENT_MS);
+    setExpired((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const key of current) {
+        if (activeKeys.has(key)) next.add(key);
+        else changed = true;
+      }
+      return changed ? next : current;
+    });
+    if (keys.length === 0) return;
+    const timers = keys.map((key) => window.setTimeout(() => {
+      setExpired((current) => {
+        if (current.has(key)) return current;
+        return new Set([...current, key]);
+      });
+    }, Math.max(0, (deadlines.current.get(key) ?? now) - now)));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [signature]);
+  return expired;
+}
+
+export function normalizeTimelineRange(range: TimelineSelection["range"]): TimelineSelection["range"] {
+  if (!range || !validActivityFrame(range.startFrame) || !validActivityFrame(range.endFrame) || range.endFrame <= range.startFrame) return undefined;
+  return { startFrame: range.startFrame, endFrame: range.endFrame };
+}
+
+export const Timeline = memo(function Timeline({ client, snapshot, timeline, selection, playheadStore, activityStore, revealActivity, onSelectionChange, onEdit, onNotice }: TimelineProps) {
   const [scale, setScale] = useState(DEFAULT_SCALE);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -148,6 +250,22 @@ export const Timeline = memo(function Timeline({ client, snapshot, timeline, sel
     }
     return entries;
   }, [clipByTrack, visibleFrameEnd, visibleFrameStart, visibleTracks]);
+  const textById = useMemo(() => {
+    const map = new Map<string, VisibleText>();
+    for (const entries of textByTrack.values()) {
+      for (const entry of entries) map.set(entry.item.id, entry);
+    }
+    return map;
+  }, [textByTrack]);
+  const transitionById = useMemo(() => new Map(snapshot.document.transitions.map((transition) => [transition.id, transition])), [snapshot.document.transitions]);
+  const activities = useAgentActivities(activityStore);
+  const recentActivities = useMemo(() => activities.slice(0, MAX_ACTIVITY_ENTRIES), [activities]);
+
+  const transientActivityKeys = useMemo(
+    () => recentActivities.filter((activity) => !activityStore.isHydrated(activity.id) && (activityIsCommitted(activity) || (activityIsVisibleAttention(activity) && activity.phase === "completed"))).map(activityIdentity),
+    [activityStore, recentActivities],
+  );
+  const expiredActivityKeys = useExpiredActivityKeys(transientActivityKeys);
   const visibleEntriesByTrack = useMemo(() => {
     const clips = new Map<string, MediaClip[]>();
     const textItems = new Map<string, VisibleText[]>();
@@ -165,6 +283,70 @@ export const Timeline = memo(function Timeline({ client, snapshot, timeline, sel
   }, [textByTrack, visibleClipEntries, visibleFrameEnd, visibleFrameStart, visibleTracks]);
   const ticks = useMemo(() => rulerTicks(duration, fpsNum, fpsDen, scale), [duration, fpsDen, fpsNum, scale]);
 
+  const trackIndexById = useMemo(() => new Map(tracks.map((track, index) => [track.id, index])), [tracks]);
+  const activityPresentation = useMemo(() => {
+    const attentionClipIds = new Set<string>();
+    const attentionTextIds = new Set<string>();
+    const attentionTrackIds = new Set<string>();
+    const changedClipIds = new Set<string>();
+    const changedTextIds = new Set<string>();
+    const changedTrackIds = new Set<string>();
+    const overlays: ActivityOverlay[] = [];
+    const visibleTrackIds = new Set(visibleTracks.map((track) => track.id));
+    const pushOverlay = (activity: AgentActivity, kind: ActivityOverlay["kind"], target: ActivityTarget, range: { trackId?: string; startFrame: number; durationFrames: number } | undefined, suffix: string) => {
+      const trackId = range?.trackId ?? target.trackId;
+      if (!trackId || !visibleTrackIds.has(trackId) || !range || range.startFrame >= visibleFrameEnd || range.startFrame + range.durationFrames <= visibleFrameStart || overlays.length >= MAX_ACTIVITY_OVERLAYS) return;
+      overlays.push({
+        key: `${activityIdentity(activity)}:${target.kind}:${target.id}:${kind}:${suffix}`,
+        kind,
+        trackId,
+        startFrame: range.startFrame,
+        durationFrames: range.durationFrames,
+        label: `${activity.label}: ${target.kind} ${target.id}${suffix ? ` · ${suffix}` : ""}`,
+      });
+    };
+    for (let activityIndex = 0; activityIndex < recentActivities.length && overlays.length < MAX_ACTIVITY_OVERLAYS; activityIndex += 1) {
+      const activity = recentActivities[activityIndex];
+      const identity = activityIdentity(activity);
+      const hydrated = activityStore.isHydrated(activity.id) && activity.phase === "completed";
+      const committed = !hydrated && activityIsCommitted(activity) && !expiredActivityKeys.has(identity);
+      const attention = !hydrated && activityIsVisibleAttention(activity) && (activity.phase !== "completed" || !expiredActivityKeys.has(identity));
+      if (!attention && !committed) continue;
+      for (const target of activity.targets.slice(0, MAX_ACTIVITY_TARGETS)) {
+        if (target.kind === "clip") {
+          if (attention) attentionClipIds.add(target.id);
+          if (committed) changedClipIds.add(target.id);
+        } else if (target.kind === "text") {
+          if (attention) attentionTextIds.add(target.id);
+          if (committed) changedTextIds.add(target.id);
+        } else if (target.kind === "track") {
+          if (attention) attentionTrackIds.add(target.id);
+          if (committed) changedTrackIds.add(target.id);
+        } else if (committed && target.trackId) {
+          changedTrackIds.add(target.trackId);
+        }
+        const range = targetRange(target, clipById, textById, transitionById);
+        if (attention && (target.kind === "track" || target.kind === "transition" || target.kind === "project" || !((target.kind === "clip" && clipById.has(target.id)) || (target.kind === "text" && textById.has(target.id))))) {
+          pushOverlay(activity, "attention", target, range, "agent attention");
+        }
+      }
+      if (!committed) continue;
+      for (const change of activity.changes.slice(0, MAX_ACTIVITY_TARGETS)) {
+        const target = change.target;
+        const currentRange = targetRange(target, clipById, textById, transitionById);
+        const fallbackTrackId = target.trackId ?? currentRange?.trackId;
+        const before = activityGeometryRange(change.before, fallbackTrackId);
+        const after = activityGeometryRange(change.after, fallbackTrackId);
+        if (target.kind === "clip") changedClipIds.add(target.id);
+        if (target.kind === "text") changedTextIds.add(target.id);
+        if (target.kind === "track" || before?.trackId || after?.trackId) changedTrackIds.add(target.trackId ?? before?.trackId ?? after?.trackId ?? "");
+        pushOverlay(activity, "ghost", target, before, "previous position");
+        pushOverlay(activity, "committed", target, after, "committed position");
+      }
+    }
+    changedTrackIds.delete("");
+    return { attentionClipIds, attentionTextIds, attentionTrackIds, changedClipIds, changedTextIds, changedTrackIds, overlays };
+  }, [clipById, expiredActivityKeys, recentActivities, textById, transitionById, tracks, visibleFrameEnd, visibleFrameStart, visibleTracks]);
   const thumbnailFramesByClip = useMemo(() => {
     const map = new Map<string, readonly number[]>();
     for (const { clip } of visibleClipEntries) {
@@ -354,6 +536,47 @@ export const Timeline = memo(function Timeline({ client, snapshot, timeline, sel
       stale = true;
     };
   }, [client, loadThumbnail, loadWaveform, previewRequestKey, previewScope, thumbnailRequests, waveformRequests]);
+  const lastRevealRequestId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const reveal = revealActivity;
+    if (!reveal || reveal.requestId === lastRevealRequestId.current) return;
+    lastRevealRequestId.current = reveal.requestId;
+    const target = reveal.targets.find((candidate) => candidate.space !== "source");
+    if (!target) return;
+    const range = targetRange(target, clipById, textById, transitionById);
+    const trackId = range?.trackId ?? target.trackId ?? (target.kind === "track" ? target.id : undefined);
+    const trackIndex = trackId === undefined ? undefined : trackIndexById.get(trackId);
+    if (!range && trackIndex === undefined) return;
+    const schedule = () => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const horizontalMargin = 36;
+      const verticalMargin = 18;
+      const rangeStart = range?.startFrame ?? frameStore.getSnapshot();
+      const rangeEnd = range ? range.startFrame + range.durationFrames : rangeStart;
+      const targetLeft = TIMELINE_LABEL_WIDTH + rangeStart * scale;
+      const targetRight = TIMELINE_LABEL_WIDTH + Math.max(rangeStart, rangeEnd) * scale;
+      let nextLeft = viewport.scrollLeft;
+      if (targetLeft < viewport.scrollLeft + horizontalMargin) nextLeft = Math.max(0, targetLeft - horizontalMargin);
+      else if (targetRight > viewport.scrollLeft + viewport.clientWidth - horizontalMargin) nextLeft = Math.max(0, targetRight - viewport.clientWidth + horizontalMargin);
+      let nextTop = viewport.scrollTop;
+      if (trackIndex !== undefined) {
+        const targetTop = RULER_HEIGHT + trackIndex * TRACK_ROW_HEIGHT;
+        const targetBottom = targetTop + TRACK_ROW_HEIGHT;
+        if (targetTop < viewport.scrollTop + verticalMargin) nextTop = Math.max(0, targetTop - verticalMargin);
+        else if (targetBottom > viewport.scrollTop + viewport.clientHeight - verticalMargin) nextTop = Math.max(0, targetBottom - viewport.clientHeight + verticalMargin);
+      }
+      if (typeof viewport.scrollTo === "function") {
+        const reducedMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        viewport.scrollTo({ left: nextLeft, top: nextTop, behavior: reducedMotion ? "auto" : "smooth" });
+      } else {
+        viewport.scrollLeft = nextLeft;
+        viewport.scrollTop = nextTop;
+      }
+    };
+    const frame = window.requestAnimationFrame(schedule);
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealActivity?.requestId]);
 
   useEffect(() => {
     setContextClip((current) => {
@@ -423,17 +646,16 @@ export const Timeline = memo(function Timeline({ client, snapshot, timeline, sel
     }
     return Math.max(0, nearest?.frame ?? frame);
   }, [frameStore, scale, snapEnabled, snapPoints]);
-
   const selectClip = useCallback(async (clip: MediaClip, additive = false) => {
+    const currentSelection = selectionAtCurrentFrame();
     const clipIds = additive ? selection.clipIds.includes(clip.id) ? selection.clipIds.filter((id) => id !== clip.id) : [...selection.clipIds, clip.id] : [clip.id];
-    await onSelectionChange({ ...selectionAtCurrentFrame(), clipIds, textIds: [], playheadFrame: clip.startFrame });
+    await onSelectionChange({ ...currentSelection, clipIds, textIds: [], playheadFrame: clip.startFrame, range: additive ? currentSelection.range : undefined });
   }, [onSelectionChange, selection, selectionAtCurrentFrame]);
   const selectText = useCallback(async (entry: VisibleText, additive = false) => {
+    const currentSelection = selectionAtCurrentFrame();
     const textIds = additive ? selection.textIds.includes(entry.item.id) ? selection.textIds.filter((id) => id !== entry.item.id) : [...selection.textIds, entry.item.id] : [entry.item.id];
-    await onSelectionChange({ ...selectionAtCurrentFrame(), clipIds: [], textIds, playheadFrame: entry.startFrame });
+    await onSelectionChange({ ...currentSelection, clipIds: [], textIds, playheadFrame: entry.startFrame, range: additive ? currentSelection.range : undefined });
   }, [onSelectionChange, selection, selectionAtCurrentFrame]);
-
-
   const toggleTrack = async (track: Track, field: "muted" | "locked") => {
     try {
       await onEdit(`Update ${track.name}`, [{ op: "update_track", trackId: track.id, [field]: !track[field] }]);
@@ -556,12 +778,21 @@ export const Timeline = memo(function Timeline({ client, snapshot, timeline, sel
     void selectText(entry, event.shiftKey).catch(() => undefined);
   }, [selectText]);
 
+  const displayedRange = rangeGhost ?? normalizeTimelineRange(selection.range);
+
   return <div className="timeline-shell" onClick={() => setContextClip(null)}>
     <div className="timeline-toolbar"><div className="timeline-title"><span className="eyebrow">Edit</span><strong>Timeline</strong><span className="timeline-duration">{formatDuration(duration, fpsNum, fpsDen)}</span></div><div className="timeline-controls"><Button variant="ghost" size="icon" aria-label="Split selected clip" disabled={!selectedClipId} onClick={() => { const clip = snapshot.document.clips.find((candidate) => candidate.id === selectedClipId); if (clip) void splitClip(clip); }}><Scissors aria-hidden="true" /></Button><Button variant="ghost" size="icon" aria-label="Add title" onClick={() => void addTitle()}><Plus aria-hidden="true" /></Button><button type="button" className={snapEnabled ? "snap-toggle active" : "snap-toggle"} onClick={() => setSnapEnabled((enabled) => !enabled)} aria-pressed={snapEnabled}><Magnet aria-hidden="true" />Snap</button><label className="zoom-control"><SlidersHorizontal aria-hidden="true" /><input type="range" min={MIN_SCALE} max={MAX_SCALE} step={SCALE_STEP} value={scale} onChange={(event) => changeZoom(Number(event.target.value))} aria-label="Timeline zoom" /></label></div></div>
-    <div className="timeline-scroll" ref={viewportRef} onScroll={(event) => { setScrollLeft(event.currentTarget.scrollLeft); setScrollTop(event.currentTarget.scrollTop); }} onClick={(event) => { if (event.target === event.currentTarget) void onSelectionChange({ ...selectionAtCurrentFrame(), playheadFrame: frameAtX(event.clientX) }); }}>
+    <div className="timeline-scroll" ref={viewportRef} onScroll={(event) => { setScrollLeft(event.currentTarget.scrollLeft); setScrollTop(event.currentTarget.scrollTop); }} onClick={(event) => { if (event.target === event.currentTarget) void onSelectionChange({ ...selectionAtCurrentFrame(), playheadFrame: frameAtX(event.clientX), range: undefined }); }}>
+
       <div className="timeline-canvas" style={{ width: contentWidth, height: Math.max(220, RULER_HEIGHT + tracks.length * TRACK_ROW_HEIGHT) }}>
-        <div className="timeline-ruler" style={{ width: contentWidth, left: 0 }} onPointerDown={beginRulerSelection} onClick={(event) => { if (didRulerDrag.current) { didRulerDrag.current = false; return; } void onSelectionChange({ ...selectionAtCurrentFrame(), playheadFrame: frameAtX(event.clientX) }); }}>{ticks.map((tick) => <span key={tick.frame} data-frame={tick.frame} style={{ left: TIMELINE_LABEL_WIDTH + tick.frame * scale }}>{tick.label}</span>)}</div>
-        {rangeGhost ? <div className="timeline-range-selection" style={{ left: TIMELINE_LABEL_WIDTH + rangeGhost.startFrame * scale, width: Math.max(1, (rangeGhost.endFrame - rangeGhost.startFrame) * scale) }} /> : null}
+        <div className="timeline-ruler" style={{ width: contentWidth, left: 0 }} onPointerDown={beginRulerSelection} onClick={(event) => { if (didRulerDrag.current) { didRulerDrag.current = false; return; } void onSelectionChange({ ...selectionAtCurrentFrame(), playheadFrame: frameAtX(event.clientX), range: undefined }); }}>{ticks.map((tick) => <span key={tick.frame} data-frame={tick.frame} style={{ left: TIMELINE_LABEL_WIDTH + tick.frame * scale }}>{tick.label}</span>)}</div>
+        {displayedRange ? <div className="timeline-range-selection" style={{ left: TIMELINE_LABEL_WIDTH + displayedRange.startFrame * scale, width: Math.max(1, (displayedRange.endFrame - displayedRange.startFrame) * scale) }} data-range-start={displayedRange.startFrame} data-range-end={displayedRange.endFrame} aria-label={`Selected range ${displayedRange.startFrame}–${displayedRange.endFrame}`} /> : null}
+
+        {activityPresentation.overlays.map((overlay) => {
+          const trackIndex = trackIndexById.get(overlay.trackId);
+          if (trackIndex === undefined) return null;
+          return <div key={overlay.key} className={`agent-activity-overlay agent-activity-${overlay.kind}`} style={{ left: TIMELINE_LABEL_WIDTH + overlay.startFrame * scale, top: RULER_HEIGHT + trackIndex * TRACK_ROW_HEIGHT + 7, width: Math.max(1, overlay.durationFrames * scale), height: TRACK_ROW_HEIGHT - 14 }} data-activity-id={overlay.key.split(":")[0]} role="img" aria-label={overlay.label} />;
+        })}
         <TimelinePlayhead frameStore={frameStore} scale={scale} fpsNum={fpsNum} fpsDen={fpsDen} />
         {visibleTracks.map((track, visibleIndex) => {
           const trackIndex = visibleTop + visibleIndex;
@@ -569,15 +800,16 @@ export const Timeline = memo(function Timeline({ client, snapshot, timeline, sel
           const visibleClips = visibleEntriesByTrack.clips.get(track.id) ?? [];
           const textItems = textByTrack.get(track.id) ?? [];
           const visibleTextItems = visibleEntriesByTrack.textItems.get(track.id) ?? [];
-          return <div className="track-row" key={track.id} style={{ top: RULER_HEIGHT + trackIndex * TRACK_ROW_HEIGHT }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => void onDrop(event, track)}><div className="track-label"><div className="track-label-name"><span className={`track-kind-dot ${track.kind}`} />{track.name}</div><div className="track-actions"><button type="button" className="track-icon" aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`} onClick={() => void toggleTrack(track, "muted")}>{track.muted ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}</button><button type="button" className="track-icon" aria-label={track.locked ? `Unlock ${track.name}` : `Lock ${track.name}`} onClick={() => void toggleTrack(track, "locked")}>{track.locked ? <Lock aria-hidden="true" /> : <UnlockIcon />}</button></div></div><div className="track-lane">{visibleClips.map((clip) => {
+          return <div className={["track-row", activityPresentation.attentionTrackIds.has(track.id) ? "agent-attention" : "", activityPresentation.changedTrackIds.has(track.id) ? "agent-activity-committed" : ""].filter(Boolean).join(" ")} key={track.id} style={{ top: RULER_HEIGHT + trackIndex * TRACK_ROW_HEIGHT }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => void onDrop(event, track)}><div className="track-label"><div className="track-label-name"><span className={`track-kind-dot ${track.kind}`} />{track.name}</div><div className="track-actions"><button type="button" className="track-icon" aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`} onClick={() => void toggleTrack(track, "muted")}>{track.muted ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}</button><button type="button" className="track-icon" aria-label={track.locked ? `Unlock ${track.name}` : `Lock ${track.name}`} onClick={() => void toggleTrack(track, "locked")}>{track.locked ? <Lock aria-hidden="true" /> : <UnlockIcon />}</button></div></div><div className="track-lane">{visibleClips.map((clip) => {
             const asset = assetById.get(clip.assetId);
             const videoSourceArtifactId = asset?.normalization?.video?.masterArtifactId;
             const audioSourceArtifactId = asset?.normalization?.audio?.pcmArtifactId;
             const thumbnailPreview = previewFor(previews[`${clip.assetId}:thumbnail`], previewScope, videoSourceArtifactId);
             const waveformPreview = previewFor(previews[`${clip.assetId}:waveform`], previewScope, audioSourceArtifactId);
-            return <TimelineClip key={clip.id} clip={clip} displayLabel={asset?.original.fileName ?? "Offline media"} selected={selectedClipIds.has(clip.id)} ghostFrame={drag?.clipId === clip.id ? drag.ghostFrame : undefined} scale={scale} thumbnailFrames={thumbnailFramesByClip.get(clip.id) ?? []} thumbnailPreview={thumbnailPreview} waveform={waveformPreview?.waveform} waveformLoading={waveformPreview?.loading} waveformError={waveformPreview?.error} showWaveform={track.kind !== "text" && Boolean(audioSourceArtifactId)} fpsNum={fpsNum} fpsDen={fpsDen} onPointerDown={onClipPointerDown} onContextMenu={onClipContextMenu} onClick={onClipClick} />;
+            return <TimelineClip key={clip.id} clip={clip} displayLabel={asset?.original.fileName ?? "Offline media"} selected={selectedClipIds.has(clip.id)} attention={activityPresentation.attentionClipIds.has(clip.id)} committed={activityPresentation.changedClipIds.has(clip.id)} ghostFrame={drag?.clipId === clip.id ? drag.ghostFrame : undefined} scale={scale} thumbnailFrames={thumbnailFramesByClip.get(clip.id) ?? []} thumbnailPreview={thumbnailPreview} waveform={waveformPreview?.waveform} waveformLoading={waveformPreview?.loading} waveformError={waveformPreview?.error} showWaveform={track.kind !== "text" && Boolean(audioSourceArtifactId)} fpsNum={fpsNum} fpsDen={fpsDen} onPointerDown={onClipPointerDown} onContextMenu={onClipContextMenu} onClick={onClipClick} />;
           })}
-          {visibleTextItems.map((entry) => <TimelineTextItem key={entry.item.id} entry={entry} selected={selectedTextIds.has(entry.item.id)} scale={scale} onClick={onTextClick} />)}
+
+          {visibleTextItems.map((entry) => <TimelineTextItem key={entry.item.id} entry={entry} selected={selectedTextIds.has(entry.item.id)} attention={activityPresentation.attentionTextIds.has(entry.item.id)} committed={activityPresentation.changedTextIds.has(entry.item.id)} scale={scale} onClick={onTextClick} />)}
           {clips.length === 0 && textItems.length === 0 ? <span className="track-empty">Drop {track.kind === "text" ? "titles or captions" : "media"} here</span> : null}</div></div>;
         })}
       </div>
@@ -594,16 +826,20 @@ const TimelinePlayhead = memo(function TimelinePlayhead({ frameStore, scale, fps
 type TimelineTextItemProps = {
   entry: VisibleText;
   selected: boolean;
+  attention: boolean;
+  committed: boolean;
   scale: number;
   onClick: (event: React.MouseEvent<HTMLButtonElement>, entry: VisibleText) => void;
 };
 
-const TimelineTextItem = memo(function TimelineTextItem({ entry, selected, scale, onClick }: TimelineTextItemProps) {
+const TimelineTextItem = memo(function TimelineTextItem({ entry, selected, attention, committed, scale, onClick }: TimelineTextItemProps) {
   const { item, startFrame, durationFrames, sourceStartFrame } = entry;
   const left = startFrame * scale;
   const width = Math.max(28, durationFrames * scale);
   const label = item.kind === "caption" ? "Caption" : "Title";
-  return <button type="button" className={selected ? "timeline-text-item selected" : "timeline-text-item"} style={{ left, width }} data-text-id={item.id} data-start-frame={startFrame} data-duration-frames={durationFrames} data-source-start-frame={sourceStartFrame} aria-label={`${label}: ${item.text}`} title={`${item.id} · timeline ${startFrame}–${startFrame + durationFrames}${sourceStartFrame === undefined ? "" : ` · source ${sourceStartFrame}–${sourceStartFrame + durationFrames}`} `} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => onClick(event, entry)}>
+  const className = ["timeline-text-item", selected ? "selected" : "", attention ? "agent-attention" : "", committed ? "agent-activity-committed" : ""].filter(Boolean).join(" ");
+  const activityLabel = attention || committed ? " · agent activity" : "";
+  return <button type="button" className={className} style={{ left, width }} data-text-id={item.id} data-start-frame={startFrame} data-duration-frames={durationFrames} data-source-start-frame={sourceStartFrame} aria-label={`${label}: ${item.text}${activityLabel}`} title={`${item.id} · timeline ${startFrame}–${startFrame + durationFrames}${sourceStartFrame === undefined ? "" : ` · source ${sourceStartFrame}–${sourceStartFrame + durationFrames}`} `} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => onClick(event, entry)}>
     <span className="timeline-text-kind">{item.kind === "caption" ? "CC" : "T"}</span><span className="timeline-text-label">{item.text}</span><span className="timeline-text-duration">{durationFrames}f</span>
   </button>;
 });
@@ -612,6 +848,8 @@ type TimelineClipProps = {
   clip: MediaClip;
   displayLabel: string;
   selected: boolean;
+  attention: boolean;
+  committed: boolean;
   ghostFrame?: number;
   scale: number;
   thumbnailFrames: readonly number[];
@@ -627,7 +865,7 @@ type TimelineClipProps = {
   onClick: (event: React.MouseEvent<HTMLDivElement>, clip: MediaClip) => void;
 };
 
-const TimelineClip = memo(function TimelineClip({ clip, displayLabel, selected, ghostFrame, scale, thumbnailFrames, thumbnailPreview, waveform, waveformLoading, waveformError, showWaveform, fpsNum, fpsDen, onPointerDown, onContextMenu, onClick }: TimelineClipProps) {
+const TimelineClip = memo(function TimelineClip({ clip, displayLabel, selected, attention, committed, ghostFrame, scale, thumbnailFrames, thumbnailPreview, waveform, waveformLoading, waveformError, showWaveform, fpsNum, fpsDen, onPointerDown, onContextMenu, onClick }: TimelineClipProps) {
   const left = (ghostFrame ?? clip.startFrame) * scale;
   const width = Math.max(28, clip.durationFrames * scale);
   const thumbnailImages: ThumbnailFrame[] = [];
@@ -648,7 +886,9 @@ const TimelineClip = memo(function TimelineClip({ clip, displayLabel, selected, 
     () => showWaveform && waveform ? waveformPeaksForClip(waveform, clip, fpsNum, fpsDen, waveformBarCount) : [],
     [clip, fpsDen, fpsNum, showWaveform, waveform, waveformBarCount],
   );
-  return <div className={selected ? "timeline-clip selected" : "timeline-clip"} style={{ left, width, opacity: ghostFrame === undefined ? 1 : 0.62 }} data-start-frame={clip.startFrame} data-source-in-frame={clip.inFrame} onPointerDown={(event) => onPointerDown(event, clip)} onContextMenu={(event) => onContextMenu(event, clip)} onClick={(event) => onClick(event, clip)} title={`${clip.id} · timeline ${clip.startFrame}–${clip.startFrame + clip.durationFrames} · source ${clip.inFrame}–${clip.inFrame + clip.durationFrames}`}>
+  const className = ["timeline-clip", selected ? "selected" : "", attention ? "agent-attention" : "", committed ? "agent-activity-committed" : ""].filter(Boolean).join(" ");
+  const activityLabel = attention || committed ? " · agent activity" : "";
+  return <div className={className} style={{ left, width, opacity: ghostFrame === undefined ? 1 : 0.62 }} data-clip-id={clip.id} data-start-frame={clip.startFrame} data-source-in-frame={clip.inFrame} onPointerDown={(event) => onPointerDown(event, clip)} onContextMenu={(event) => onContextMenu(event, clip)} onClick={(event) => onClick(event, clip)} aria-label={`${displayLabel}: timeline ${clip.startFrame}–${clip.startFrame + clip.durationFrames}${activityLabel}`} title={`${clip.id} · timeline ${clip.startFrame}–${clip.startFrame + clip.durationFrames} · source ${clip.inFrame}–${clip.inFrame + clip.durationFrames}`}>
     {hasThumbnailSurface ? <div className="clip-preview-strip" aria-hidden="true">{thumbnailImages.map((image) => <img className="clip-preview-cell" key={`${image.artifactId}:${image.frame}`} src={image.url} alt="" draggable={false} data-source-frame={image.frame} />)}{thumbnailStatus ? <span className="clip-media-status">{thumbnailStatus}</span> : null}{thumbnailImages.length > 0 ? <span className="artifact-badge">native</span> : null}</div> : null}
     <div className="clip-info"><strong>{displayLabel}</strong><span>{clip.durationFrames}f</span></div>
     {showWaveform && waveformPeaks.length > 0 ? <div className="clip-waveform" aria-label="Audio waveform">{waveformPeaks.map((peak, index) => <span className="clip-waveform-bar" key={`${clip.id}:peak:${index}`} style={{ height: `${Math.round(peak * 100)}%` }} />)}</div> : null}{showWaveform && waveformPeaks.length === 0 && (waveformLoading || waveformError) ? <span className="clip-media-status">{waveformLoading ? "Preparing waveform…" : "Waveform unavailable"}</span> : null}
