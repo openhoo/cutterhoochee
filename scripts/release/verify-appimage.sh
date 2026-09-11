@@ -40,4 +40,42 @@ done
 [[ -x "$appdir/AppRun" ]] || { echo "error: AppRun is not executable" >&2; exit 1; }
 [[ -x "$appdir/usr/bin/cutterhoochee" ]] || { echo "error: bundled executable is not executable" >&2; exit 1; }
 
-printf 'Verified %s: executable, desktop entry, sidecar manifest, and source/build notices present.\n' "$expected_name"
+if [[ -e "$appdir/usr/lib/libglycin-2.so.0" ]]; then
+  marker="$appdir/usr/share/cutterhoochee/gtk-runtime.json"
+  [[ -s "$marker" ]] || { echo "error: bundled Glycin has no runtime manifest" >&2; exit 1; }
+  jq -e '
+    .version == 1 and .glycinCompatVersion == "2+" and
+    (.loaders | type == "array") and
+    (.loaders | length == (unique | length)) and
+    all(.loaders[]; type == "string" and test("^glycin-(image-rs|svg|heif|jxl)$")) and
+    (.loaders | index("glycin-image-rs") != null) and
+    (.loaders | index("glycin-svg") != null)
+  ' "$marker" >/dev/null
+  for required in \
+    usr/bin/bwrap \
+    usr/bin/cutterhoochee-bwrap \
+    usr/share/mime/mime.cache \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/gtk-runtime-SOURCE.txt \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/linuxdeploy-plugin-gtk-LICENSE.txt \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/gdk-pixbuf-LICENSE.txt \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/glycin-LICENSE.txt \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/libheif-LICENSE.txt \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/bubblewrap-LICENSE.txt \
+    usr/lib/Cutterhoochee/resources/notices/gtk-runtime/shared-mime-info-LICENSE.txt; do
+    [[ -s "$appdir/$required" ]] || { echo "error: GTK runtime is missing $required" >&2; exit 1; }
+  done
+  [[ -x "$appdir/usr/bin/bwrap" ]] || { echo "error: bundled sandbox wrapper is not executable" >&2; exit 1; }
+  mapfile -t gtk_loaders < <(jq -r '.loaders[]' "$marker")
+  for executable in cutterhoochee-bwrap "${gtk_loaders[@]}"; do
+    binary="$appdir/usr/bin/$executable"
+    [[ -x "$binary" ]] || { echo "error: GTK runtime executable is missing: $executable" >&2; exit 1; }
+    readelf -d "$binary" | grep -E '\((RPATH|RUNPATH)\).*[$]ORIGIN/\.\./lib(:|])' >/dev/null ||
+      { echo "error: $executable cannot resolve bundled libraries inside its sandbox" >&2; exit 1; }
+  done
+  for loader in "${gtk_loaders[@]}"; do
+    [[ -s "$appdir/usr/share/glycin-loaders/2+/conf.d/$loader.conf" ]] ||
+      { echo "error: GTK runtime config is missing: $loader" >&2; exit 1; }
+  done
+fi
+
+printf 'Verified %s: executable, desktop entry, GTK runtime, sidecar manifest, and source/build notices present.\n' "$expected_name"

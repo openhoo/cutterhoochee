@@ -1,0 +1,19 @@
+#!/bin/sh
+# Cutterhoochee Glycin wrapper. Keep Glycin's sandbox arguments untouched.
+set -eu
+
+self=$(readlink -f "$0")
+appdir=$(dirname "$(dirname "$(dirname "$self")")")
+real="$appdir/usr/bin/cutterhoochee-bwrap"
+libdir="$appdir/usr/lib"
+
+[ -x "$real" ] || {
+    echo "cutterhoochee-bwrap: missing bundled bubblewrap: $real" >&2
+    exit 127
+}
+[ -d "$libdir" ] || {
+    echo "cutterhoochee-bwrap: missing bundled library directory: $libdir" >&2
+    exit 127
+}
+
+exec "$real" --ro-bind "$libdir" "$libdir" "$@"

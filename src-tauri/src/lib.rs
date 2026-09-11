@@ -4,6 +4,7 @@ pub mod assistant;
 pub mod credentials;
 pub mod editor;
 pub mod error;
+mod gtk_runtime;
 pub mod ipc;
 pub mod media;
 pub mod permissions;
@@ -19,6 +20,7 @@ use crate::permissions::FileGrantPurpose;
 use crate::state::AppState;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::http::{header, HeaderValue, Method, Request, Response, StatusCode};
 use tauri::ipc::{Channel, InvokeResponseBody, Response as IpcResponse};
@@ -29,7 +31,13 @@ const MAX_FULL_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_SOFTWARE_HEADER_BYTES: usize = 4096;
 const MAX_SOFTWARE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 pub fn run() {
-    tauri::Builder::default()
+    // This must happen before Builder::build initializes GTK or any image-loading
+    // thread can cause Glycin to cache the host configuration.
+    let gtk_runtime =
+        gtk_runtime::prepare().expect("error while preparing the packaged GTK/Glycin runtime");
+    let gtk_runtime = Arc::new(Mutex::new(Some(gtk_runtime)));
+    let setup_runtime = Arc::clone(&gtk_runtime);
+    let app_result = tauri::Builder::default()
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -51,21 +59,12 @@ pub fn run() {
         .register_uri_scheme_protocol("artifact", |_ctx, request| {
             artifact_protocol_response(_ctx, request)
         })
-        .setup(|app| {
-            let paths = agent_bridge::AgentPaths::from_app(app.handle())?;
-            let state = AppState::new_with_handle(paths, Some(app.handle().clone()))?;
-            app.manage(state.clone());
-
-            // Sidecar startup is supervised and never blocks the UI. A missing
-            // packaged resource leaves manual editing available and is exposed
-            // as a restartable assistant error instead of a fake success.
-            let bridge_state = state.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = bridge_state.ensure_agent_bridge().await {
-                    eprintln!("[cutterhoochee-agent] {}", error.message);
-                }
-            });
-            Ok(())
+        .setup(move |app| {
+            let result = setup_app(app);
+            if result.is_err() {
+                cleanup_gtk_runtime(&setup_runtime);
+            }
+            result
         })
         .invoke_handler(tauri::generate_handler![
             editor::dispatcher::editor_call,
@@ -77,8 +76,42 @@ pub fn run() {
             agent_activity_snapshot,
             preview_transport_complete,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Cutterhoochee");
+        .build(tauri::generate_context!());
+    let app = app_result.unwrap_or_else(|error| {
+        cleanup_gtk_runtime(&gtk_runtime);
+        panic!("error while building Cutterhoochee: {error}");
+    });
+
+    app.run(move |_app_handle, event| {
+        // ExitRequested is cancellable and can be followed by more GTK work.
+        // Cleanup belongs to the final, non-cancellable Exit event.
+        if matches!(event, tauri::RunEvent::Exit) {
+            cleanup_gtk_runtime(&gtk_runtime);
+        }
+    });
+}
+
+fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = agent_bridge::AgentPaths::from_app(app.handle())?;
+    let state = AppState::new_with_handle(paths, Some(app.handle().clone()))?;
+    app.manage(state.clone());
+
+    // Sidecar startup is supervised and never blocks the UI. A missing
+    // packaged resource leaves manual editing available and is exposed
+    // as a restartable assistant error instead of a fake success.
+    let bridge_state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = bridge_state.ensure_agent_bridge().await {
+            eprintln!("[cutterhoochee-agent] {}", error.message);
+        }
+    });
+    Ok(())
+}
+
+fn cleanup_gtk_runtime(runtime: &Arc<Mutex<Option<gtk_runtime::RuntimeGuard>>>) {
+    if let Ok(mut runtime) = runtime.lock() {
+        runtime.take();
+    }
 }
 
 #[tauri::command]
