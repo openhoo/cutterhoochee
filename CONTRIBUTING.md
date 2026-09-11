@@ -20,6 +20,27 @@ Preparing sidecars downloads checksum-pinned Node and whisper.cpp inputs and sta
 
 For a desktop package, run `pnpm bundle:linux`. For an interactive desktop development session, run `pnpm dev` after staging. A browser-only frontend is not proof of native file access, rendering, audio, or permissions.
 
+## Rendering and output ownership
+
+The native pipeline is `ProjectDocument → RenderPlan → canonical RGBA/PCM → FFmpeg → verified output`. Preview and export consume the same immutable plan; neither output transport nor encoding defines a second timeline compositor.
+
+| Module under `src-tauri/src/media/` | Responsibility |
+| --- | --- |
+| `render_plan.rs` | Compile and validate revision-pinned geometry, timing, audio envelopes, and artifact references. |
+| `render/mod.rs` | Preview IPC, runtime state, revision capture, and transport coordination. |
+| `render/frame.rs` | Shared layer composition and the stateless/pooled canonical RGBA renderers. |
+| `render/audio.rs` | Indexed 48 kHz stereo mixing. |
+| `render/decoder.rs`, `render/cache.rs` | Owned decoder processes and bounded artifact/raster caches. |
+| `render/software.rs` | Reduced-resolution preview, JPEG transport, pacing, acknowledgements, and cancellation. |
+| `export/mod.rs`, `export/runtime.rs` | Public export contracts, approval-gated orchestration, and job lifecycle. |
+| `export/encode.rs` | Buffered PCM production, pooled frame streaming, encoding, and output verification. |
+| `export/output.rs`, `export/subtitle.rs` | Destination identity, artifact pins, temporary files, rollback-safe publication, and SRT projection. |
+| `ffmpeg.rs`, `jobs.rs` | Typed media commands and supervised, cancellable process execution. |
+
+Keep output geometry in `ExportVideoSettings`; do not patch FFmpeg arguments after construction. Flush and synchronize intermediate audio before encoding. Publish MP4/SRT only after stream verification and exact destination approval checks; retain existing rollback and cancellation semantics.
+
+For rendering changes, compare stateless and pooled frame hashes with `pnpm benchmark:render --project /absolute/fixture.cutproj --resources /absolute/repository/src-tauri`. Also exercise native playback, both export resolutions, optional SRT, and cancellation using disposable media. Compilation alone does not prove output fidelity or process cleanup.
+
 ## Change verification
 
 Keep regression coverage tied to observable behavior: atomic project edits, durable persistence, stale-generation rejection, explicit permissions, and preview/export consistency. Use generated footage and disposable project directories. Do not commit application state, credentials, personal media, downloaded runtimes, or build output.

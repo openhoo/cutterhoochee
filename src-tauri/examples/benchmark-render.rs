@@ -3,7 +3,7 @@
 //! checksum calculation, and pooled-renderer construction are reported separately.
 use cutterhoochee_lib::media::artifacts::ArtifactStore;
 use cutterhoochee_lib::media::ffmpeg::FfmpegToolchain;
-use cutterhoochee_lib::media::render::{render_rgba_frame, CanonicalFrameRenderer};
+use cutterhoochee_lib::media::render::frame::{render_rgba_frame, CanonicalFrameRenderer};
 use cutterhoochee_lib::media::render_plan::{compile_render_plan, RenderPlan};
 use cutterhoochee_lib::project::model::ProjectEnvelope;
 use serde_json::{json, Value};

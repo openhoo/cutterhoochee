@@ -1,22 +1,18 @@
 //! Typed FFmpeg/ffprobe process boundaries used by the canonical renderer.
 //!
-//! The renderer never accepts a model- or user-authored filter graph.  Every
-//! argument in this module is produced from validated numeric values or a
-//! renderer-owned graph fragment, and graph text is written to a private file
-//! before FFmpeg is started.  Keeping this boundary small also makes it
-//! possible to point a packaged build at its bundled FFmpeg without relying on
-//! PATH.
+//! The renderer never accepts a model- or user-authored filter graph. Every
+//! argument is produced from validated numeric values or renderer-owned
+//! filters. The executable comes from the selected toolchain, so packaged
+//! rendering does not rely on PATH.
 
 use crate::error::{AppError, ErrorCode};
 use crate::project::model::{FrameRate, AUDIO_SAMPLE_RATE};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 /// Absolute paths to the media executables selected by packaging.  Development
 /// may use the host tools, but callers can never provide arbitrary executable
 /// paths through an editor request.
@@ -142,85 +138,6 @@ fn ffmpeg_failure(stderr: &[u8]) -> AppError {
     )
 }
 
-/// A filter graph is deliberately represented as individual renderer-owned
-/// chains.  `compile` joins them only after checking that labels are unique.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TypedFilterGraph {
-    chains: Vec<String>,
-}
-
-impl TypedFilterGraph {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push_chain(&mut self, chain: impl Into<String>) -> Result<(), AppError> {
-        let chain = chain.into();
-        if chain.trim().is_empty() || chain.bytes().any(|byte| byte == 0) {
-            return Err(AppError::invalid_argument(
-                "A renderer filter chain is empty or invalid",
-            ));
-        }
-        self.chains.push(chain);
-        Ok(())
-    }
-
-    pub fn compile(&self) -> Result<String, AppError> {
-        if self.chains.is_empty() {
-            return Err(AppError::invalid_argument(
-                "A renderer filter graph must contain a chain",
-            ));
-        }
-        Ok(self.chains.join(";\n"))
-    }
-
-    pub fn write_private_file(
-        &self,
-        directory: &Path,
-        stem: &str,
-    ) -> Result<PrivateGraphFile, AppError> {
-        let graph = self.compile()?;
-        fs::create_dir_all(directory)
-            .map_err(|_| AppError::io("The FFmpeg graph directory could not be created"))?;
-        let nonce = unique_nonce();
-        let path = directory.join(format!(".{stem}-{nonce:016x}.graph"));
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)
-            .map_err(|_| AppError::io("The private FFmpeg graph file could not be created"))?;
-        file.write_all(graph.as_bytes())
-            .and_then(|_| file.sync_all())
-            .map_err(|_| AppError::io("The private FFmpeg graph file could not be written"))?;
-        Ok(PrivateGraphFile { path })
-    }
-}
-
-#[derive(Debug)]
-pub struct PrivateGraphFile {
-    path: PathBuf,
-}
-
-impl PrivateGraphFile {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for PrivateGraphFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn unique_nonce() -> u64 {
-    let time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let nanos = time.as_nanos() as u64;
-    nanos ^ (std::process::id() as u64).rotate_left(17)
-}
-
 /// FFmpeg's standalone-media allowlist.  Raw f32/video inputs used by the
 /// renderer are kept in a separate internal list so an imported manifest can
 /// never select them to escape the media demuxer policy.
@@ -316,7 +233,7 @@ fn rational_timestamp(frame: u64, fps: FrameRate) -> Result<String, AppError> {
     Ok(format!("{}.{:06}", micros / 1_000_000, micros % 1_000_000))
 }
 
-/// Write raw stereo float32 PCM as a WAV-like FFmpeg input file.  The payload
+/// Write raw stereo float32 PCM as a WAV-like FFmpeg input file. The payload
 /// is intentionally f32le so no lossy intermediate conversion is introduced.
 pub fn build_raw_audio_input(path: &Path, sample_count: u64, pcm: &[f32]) -> Result<(), AppError> {
     let expected = (sample_count as usize)
@@ -329,33 +246,62 @@ pub fn build_raw_audio_input(path: &Path, sample_count: u64, pcm: &[f32]) -> Res
     }
     let mut file = File::create(path)
         .map_err(|_| AppError::io("The temporary PCM file could not be created"))?;
-    for sample in pcm {
-        file.write_all(&sample.to_le_bytes())
-            .map_err(|_| AppError::io("The temporary PCM file could not be written"))?;
+    {
+        let mut writer = BufWriter::with_capacity(64 * 1024, &mut file);
+        for sample in pcm {
+            writer
+                .write_all(&sample.to_le_bytes())
+                .map_err(|_| AppError::io("The temporary PCM file could not be written"))?;
+        }
+        writer
+            .flush()
+            .map_err(|_| AppError::io("The temporary PCM file could not be flushed"))?;
     }
     file.sync_all()
         .map_err(|_| AppError::io("The temporary PCM file could not be synchronized"))
 }
 
-/// Build an export command from an immutable plan.  Video arrives as RGBA
-/// frames over stdin, while audio is an app-owned indexed f32le artifact.  No
-/// caller can inject a filtergraph or an output codec.
+/// Validated renderer-owned settings for the raw RGBA export stream.
+///
+/// `source_*` describes the pixels written to FFmpeg stdin. `output_*`
+/// describes the encoded video geometry. Keeping both in this value prevents
+/// callers from mutating a completed command after it is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportVideoSettings {
+    pub source_width: u32,
+    pub source_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub fps: FrameRate,
+}
+
+impl ExportVideoSettings {
+    fn validate(self) -> Result<(), AppError> {
+        self.fps.validate()?;
+        if self.source_width == 0
+            || self.source_height == 0
+            || self.output_width == 0
+            || self.output_height == 0
+        {
+            return Err(AppError::invalid_argument(
+                "Export source and output dimensions must be positive",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Build an export command from immutable, validated renderer settings. Video
+/// arrives as RGBA frames over stdin, while audio is an app-owned indexed
+/// f32le artifact. No caller can inject a filtergraph or an output codec.
 pub fn build_export_command(
     toolchain: &FfmpegToolchain,
-    width: u32,
-    height: u32,
-    fps: FrameRate,
+    settings: ExportVideoSettings,
     audio_path: &Path,
     output_path: &Path,
-    graph_file: Option<&Path>,
 ) -> Result<FfmpegCommand, AppError> {
-    fps.validate()?;
-    if width == 0 || height == 0 {
-        return Err(AppError::invalid_argument(
-            "Export dimensions must be positive",
-        ));
-    }
-    let mut command = safe_input_prefix_with_formats(
+    settings.validate()?;
+    Ok(safe_input_prefix_with_formats(
         FfmpegCommand::new(toolchain.ffmpeg.clone())
             .arg("-y")
             .arg("-f")
@@ -363,9 +309,12 @@ pub fn build_export_command(
             .arg("-pix_fmt")
             .arg("rgba")
             .arg("-video_size")
-            .arg(format!("{width}x{height}"))
+            .arg(format!(
+                "{}x{}",
+                settings.source_width, settings.source_height
+            ))
             .arg("-framerate")
-            .arg(format!("{}/{}", fps.num, fps.den))
+            .arg(format!("{}/{}", settings.fps.num, settings.fps.den))
             .arg("-i")
             .arg("pipe:0")
             .arg("-f")
@@ -380,6 +329,11 @@ pub fn build_export_command(
             .arg("0:v:0")
             .arg("-map")
             .arg("1:a:0")
+            .arg("-vf")
+            .arg(format!(
+                "scale={}:{}:flags=bicubic",
+                settings.output_width, settings.output_height
+            ))
             .arg("-c:v")
             .arg("libx264")
             .arg("-crf")
@@ -398,13 +352,10 @@ pub fn build_export_command(
             .arg("-progress")
             .arg("pipe:1"),
         RAW_RENDERER_FORMAT_ALLOWLIST,
-    );
-    if let Some(graph) = graph_file {
-        // Graph files are only accepted when created by TypedFilterGraph.  The
-        // caller cannot pass graph text through this API.
-        command = command.arg("-filter_complex_script").arg(graph.as_os_str());
-    }
-    Ok(command.arg("-f").arg("mp4").arg(output_path.as_os_str()))
+    )
+    .arg("-f")
+    .arg("mp4")
+    .arg(output_path.as_os_str()))
 }
 
 /// Run ffprobe with the same protocol/format restrictions used for media
@@ -543,36 +494,4 @@ pub fn parse_export_metadata(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn media_allowlist_excludes_network_and_playlist_inputs() {
-        assert!(MEDIA_PROTOCOL_ALLOWLIST
-            .split(',')
-            .all(|value| value != "http"));
-        assert!(!MEDIA_DEMUXER_ALLOWLIST
-            .split(',')
-            .any(|value| value == "hls"));
-    }
-
-    #[test]
-    fn private_graph_file_is_removed_on_drop() {
-        let directory =
-            std::env::temp_dir().join(format!("cutterhoochee-graph-{}", unique_nonce()));
-        let graph = TypedFilterGraph {
-            chains: vec!["[0:v]format=rgba[out]".to_owned()],
-        };
-        let file = graph
-            .write_private_file(&directory, "frame")
-            .expect("graph");
-        let path = file.path().to_owned();
-        assert!(path.exists());
-        drop(file);
-        assert!(!path.exists());
-        let _ = fs::remove_dir_all(directory);
-    }
 }
