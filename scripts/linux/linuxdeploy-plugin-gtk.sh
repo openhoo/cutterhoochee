@@ -340,9 +340,9 @@ env LINUXDEPLOY_PLUGIN_MODE=1 "$LINUXDEPLOY" --appdir="$APPDIR" "${LIBRARIES[@]}
 if [ "$glycin_linked" = true ]; then
     command -v patchelf >/dev/null 2>&1 || { echo "$script: patchelf is required for Glycin runtime ELFs" >&2; exit 1; }
     for loader in "${loaders[@]}"; do
-        patchelf --set-rpath '$ORIGIN/../lib' "$APPDIR/usr/bin/$loader"
+        patchelf --set-rpath '$ORIGIN/../lib:/cutterhoochee/lib' "$APPDIR/usr/bin/$loader"
     done
-    patchelf --set-rpath '$ORIGIN/../lib' "$APPDIR/usr/bin/cutterhoochee-bwrap"
+    patchelf --set-rpath '$ORIGIN/../lib:/cutterhoochee/lib' "$APPDIR/usr/bin/cutterhoochee-bwrap"
     mkdir -p "$APPDIR/usr/share/cutterhoochee"
     cat > "$APPDIR/usr/share/cutterhoochee/gtk-runtime.json" <<'EOF'
 {

@@ -1,4 +1,5 @@
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,11 +11,12 @@ const bundleLinux = process.argv.includes("--bundle-linux");
 const tauriToolsDir = resolve(root, "src-tauri", "target", ".tauri");
 const gtkToolSources = [
   [resolve(root, "scripts", "linux", "linuxdeploy-plugin-gtk.sh"), "linuxdeploy-plugin-gtk.sh"],
+  [resolve(root, "scripts", "linux", "linuxdeploy-plugin-gstreamer.sh"), "linuxdeploy-plugin-gstreamer.sh"],
   [resolve(root, "scripts", "linux", "bwrap"), "bwrap"],
 ];
 const gtkRuntimeNoticeDir = resolve(root, "scripts", "linux", "gtk-runtime-notices");
 
-function stageGtkTools() {
+async function stageGtkTools() {
   if (process.platform !== "linux") return undefined;
   mkdirSync(tauriToolsDir, { recursive: true });
   for (const [source, name] of gtkToolSources) {
@@ -27,10 +29,32 @@ function stageGtkTools() {
     copyFileSync(source, destination);
     chmodSync(destination, statSync(source).mode & 0o777);
   }
+  // Keep the existing external GStreamer tool byte-for-byte, but run our
+  // finalizer after its recursive linuxdeploy pass resets executable RUNPATHs.
+  const upstream = join(tauriToolsDir, "cutterhoochee-gstreamer-upstream.sh");
+  const checksum = "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94";
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  if (!existsSync(upstream) || digest(readFileSync(upstream)) !== checksum) {
+    const response = await fetch(
+      "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/linuxdeploy-plugin-gstreamer.sh",
+      { signal: AbortSignal.timeout(30_000) },
+    );
+    if (!response.ok) throw new Error(`GStreamer deployment tool download failed: HTTP ${response.status}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (digest(bytes) !== checksum) throw new Error("GStreamer deployment tool checksum mismatch");
+    const temporary = `${upstream}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temporary, bytes, { mode: 0o755 });
+      renameSync(temporary, upstream);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  }
+  chmodSync(upstream, 0o755);
   return tauriToolsDir;
 }
 
-const stagedGtkToolsDir = stageGtkTools();
+const stagedGtkToolsDir = await stageGtkTools();
 
 if (process.platform === "linux" && !stagedGtkToolsDir) {
   throw new Error("GTK packaging tools can only be selected from the project-local Tauri tools directory");

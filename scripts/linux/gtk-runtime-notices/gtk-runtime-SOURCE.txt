@@ -33,8 +33,10 @@ Bubblewrap
   Source: https://github.com/containers/bubblewrap/releases/tag/v0.11.2
   License: LGPL-2.0-or-later (see bubblewrap-LICENSE.txt)
   The installed ELF is copied as usr/bin/cutterhoochee-bwrap and receives
-  the AppImage-relative $ORIGIN/../lib RPATH. usr/bin/bwrap is a POSIX
-  wrapper that adds only the read-only same-path AppDir/usr/lib bind.
+  $ORIGIN/../lib:/cutterhoochee/lib RUNPATH, as do the loaders. usr/bin/bwrap
+  adds only a read-only AppDir/usr/lib bind at /cutterhoochee/lib. The fixed
+  sandbox path lets the dynamic linker work without exposing /proc or
+  restoring environment variables cleared by Glycin.
 
 Shared MIME data
   Package: shared-mime-info 2.5.1-2 (Arch Linux)

@@ -16,4 +16,6 @@ libdir="$appdir/usr/lib"
     exit 127
 }
 
-exec "$real" --ro-bind "$libdir" "$libdir" "$@"
+# Glycin deliberately omits /proc. The dynamic linker cannot derive the main
+# executable's $ORIGIN there, so give its packaged RUNPATH a fixed private mount.
+exec "$real" --ro-bind "$libdir" /cutterhoochee/lib "$@"

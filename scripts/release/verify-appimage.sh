@@ -69,7 +69,7 @@ if [[ -e "$appdir/usr/lib/libglycin-2.so.0" ]]; then
   for executable in cutterhoochee-bwrap "${gtk_loaders[@]}"; do
     binary="$appdir/usr/bin/$executable"
     [[ -x "$binary" ]] || { echo "error: GTK runtime executable is missing: $executable" >&2; exit 1; }
-    readelf -d "$binary" | grep -E '\((RPATH|RUNPATH)\).*[$]ORIGIN/\.\./lib(:|])' >/dev/null ||
+    readelf -d "$binary" | grep -E '\((RPATH|RUNPATH)\).*\[[$]ORIGIN/\.\./lib:/cutterhoochee/lib\]' >/dev/null ||
       { echo "error: $executable cannot resolve bundled libraries inside its sandbox" >&2; exit 1; }
   done
   for loader in "${gtk_loaders[@]}"; do
