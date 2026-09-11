@@ -59,3 +59,7 @@ Use Conventional Commits. Pull requests must explain compatibility and security 
 `VERSION` is the canonical application release version. Hooversion updates it and the changelog, then runs `node scripts/release/sync-version.mjs` to synchronize the Rust, Tauri, and Node manifests. `pnpm version:check` detects drift. Do not independently bump one package or manually publish an unverified local AppImage.
 
 The GitHub workflows and pinned OpenHoo tools define the CI and release gates. A successful source check does not by itself qualify a binary release; inspect the native build, checksums, SBOM, signatures, attestations, and publication verification.
+
+CI archives Hooray's full JSON report; SARIF conversion is not needed by a downstream consumer. Online vulnerability checks and policy enforcement remain enabled.
+
+Successful `main` push CI retains its verified AppImage and commit/run-bound metadata for seven days. Release publication downloads that exact CI artifact, verifies its identity and checksum, and packages its bundled notices without rebuilding the installer. Missing, expired, or mismatched artifacts fail publication; signatures, attestations, and immutable-release verification still run.

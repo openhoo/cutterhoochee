@@ -69,13 +69,14 @@ jobs:
           version: ${{ env.HOOLICY_VERSION }}
           config: hoolicy.yaml
           format: text
+      # Emit Hooray's full JSON report; no consumer needs the costly SARIF conversion.
       - name: Scan dependencies and source with Hooray
         uses: openhoo/hooray/actions/scan@26aeb8cc43bb82248b4287037cac038185a2682d # v0.6.6
         with:
           version: ${{ env.TOOL_HOORAY_VERSION }}
           policy: hooray-policy.yaml
-          format: sarif
-          output: ${{ runner.temp }}/hooray.sarif
+          format: json
+          output: ${{ runner.temp }}/hooray.json
       - name: Analyze source with Hoonarqube
         uses: openhoo/hoonarqube/actions/analyze@36c6036b7c36849d920db793acbe4e46d68fde0f # v0.8.1
         with:
@@ -93,7 +94,7 @@ jobs:
         with:
           name: source-analysis
           path: |
-            ${{ runner.temp }}/hooray.sarif
+            ${{ runner.temp }}/hooray.json
             ${{ runner.temp }}/hoonarqube.json
           if-no-files-found: warn
           retention-days: 7
@@ -203,3 +204,61 @@ jobs:
           bash scripts/release/verify-appimage.sh "$appimage" "$version"
       - name: Verify optimized glib string iterator safety
         run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml --test glib_variant_str_iter
+
+      - name: Stage verified release AppImage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          CI_COMMIT: ${{ github.sha }}
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_ARTIFACT_NAME: cutterhoochee-ci-appimage-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$CI_COMMIT" = "$(git rev-parse HEAD)"
+          version=$(tr -d '[:space:]' < VERSION)
+          appimage="src-tauri/target/release/bundle/appimage/Cutterhoochee_${version}_amd64.AppImage"
+          test -f "$appimage"
+          test -x "$appimage"
+          output_dir="$RUNNER_TEMP/cutterhoochee-ci-appimage"
+          rm -rf "$output_dir"
+          mkdir -p "$output_dir"
+          appimage_name=$(basename "$appimage")
+          install -m 0755 "$appimage" "$output_dir/$appimage_name"
+          appimage_sha256=$(sha256sum "$appimage" | awk '{ print $1 }')
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflow "$GITHUB_WORKFLOW" \
+            --arg workflow_file ".github/workflows/ci.yml" \
+            --arg event "$GITHUB_EVENT_NAME" \
+            --arg head_branch "$GITHUB_REF_NAME" \
+            --arg head_sha "$CI_COMMIT" \
+            --arg run_id "$CI_RUN_ID" \
+            --arg artifact_name "$CI_ARTIFACT_NAME" \
+            --arg version "$version" \
+            --arg target x86_64-unknown-linux-gnu \
+            --arg appimage_name "$appimage_name" \
+            --arg appimage_sha256 "$appimage_sha256" \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              workflow: $workflow,
+              workflow_file: $workflow_file,
+              event: $event,
+              head_branch: $head_branch,
+              head_sha: $head_sha,
+              run_id: ($run_id | tonumber),
+              artifact_name: $artifact_name,
+              version: $version,
+              target: $target,
+              appimage_name: $appimage_name,
+              appimage_sha256: $appimage_sha256
+            }' > "$output_dir/cutterhoochee-ci-appimage-metadata.json"
+
+      - name: Upload verified release AppImage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cutterhoochee-ci-appimage-${{ github.sha }}
+          path: ${{ runner.temp }}/cutterhoochee-ci-appimage/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

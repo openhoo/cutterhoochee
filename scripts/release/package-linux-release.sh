@@ -2,15 +2,16 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <version> <tag> <commit> <arch-image> <arch-snapshot>" >&2
+  echo "usage: $0 <version> <tag> <commit> <arch-image> <arch-snapshot> <verified-appimage>" >&2
   exit 2
 }
-[[ $# -eq 5 ]] || usage
+[[ $# -eq 6 ]] || usage
 version=$1
 tag=$2
 commit=$3
 arch_image=$4
 arch_snapshot=$5
+appimage_input=$6
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
@@ -34,19 +35,17 @@ tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}")
 node scripts/release/sync-version.mjs --check
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo "error: release source tree is not clean" >&2; exit 1; }
 
-manifest=src-tauri/resources/notices/sidecar-manifest.json
-[[ -s "$manifest" ]] || { echo "error: missing generated sidecar manifest" >&2; exit 1; }
-jq -e --arg target x86_64-unknown-linux-gnu '.status == "ready" and .target == $target and .requirements.noPathFallback == true and .requirements.releaseRequiresAllBinaryNotices == true' "$manifest" >/dev/null
-cmp "$manifest" sidecars/manifest.json
-
-appimage="src-tauri/target/release/bundle/appimage/Cutterhoochee_${version}_amd64.AppImage"
-[[ -f "$appimage" ]] || { echo "error: exact versioned AppImage is missing: $appimage" >&2; exit 1; }
-[[ -x "$appimage" ]] || { echo "error: exact versioned AppImage is not executable" >&2; exit 1; }
+[[ -f "$appimage_input" ]] || { echo "error: verified AppImage is missing: $appimage_input" >&2; exit 1; }
+appimage=$(realpath "$appimage_input")
+expected_appimage="Cutterhoochee_${version}_amd64.AppImage"
+[[ "$(basename "$appimage")" == "$expected_appimage" ]] || {
+  echo "error: verified AppImage filename must be $expected_appimage" >&2
+  exit 1
+}
+[[ -x "$appimage" ]] || { echo "error: verified AppImage is not executable" >&2; exit 1; }
 scripts/release/verify-appimage.sh "$appimage" "$version"
-appimage=$(realpath "$appimage")
 
-# Packaging adds GTK runtime notices after sidecar preparation. Publish the
-# notices from the actual installer rather than an earlier source staging tree.
+# Read generated notices from the verified installer, not an unbuilt checkout.
 tmp_notices=$(mktemp -d "${TMPDIR:-/tmp}/cutterhoochee-notices.XXXXXXXX")
 trap 'rm -rf "$tmp_notices"' EXIT
 (
@@ -55,7 +54,9 @@ trap 'rm -rf "$tmp_notices"' EXIT
 )
 bundled_notices="$tmp_notices/squashfs-root/usr/lib/Cutterhoochee/resources/notices"
 [[ -d "$bundled_notices" ]] || { echo "error: bundled release notices are missing" >&2; exit 1; }
-cmp "$manifest" "$bundled_notices/sidecar-manifest.json"
+manifest="$bundled_notices/sidecar-manifest.json"
+[[ -s "$manifest" ]] || { echo "error: bundled sidecar manifest is missing" >&2; exit 1; }
+jq -e --arg target x86_64-unknown-linux-gnu '.status == "ready" and .target == $target and .requirements.noPathFallback == true and .requirements.releaseRequiresAllBinaryNotices == true' "$manifest" >/dev/null
 
 # dist is this script's sole output directory; never reuse a cached release bundle.
 rm -rf dist
@@ -66,7 +67,6 @@ mkdir -p "$stage/notices"
 install -m 0755 "$appimage" "$stage/Cutterhoochee_${version}_amd64.AppImage"
 install -m 0644 LICENSE "$stage/LICENSE"
 cp -a "$bundled_notices/." "$stage/notices/"
-install -m 0644 sidecars/manifest.json "$stage/notices/sidecar-manifest.json"
 
 appimage_sha256=$(sha256sum "$appimage" | awk '{ print $1 }')
 manifest_sha256=$(sha256sum "$manifest" | awk '{ print $1 }')
@@ -100,7 +100,6 @@ install -m 0644 LICENSE "dist/Cutterhoochee_${version}_LICENSE"
 tar -xOzf "dist/${package}.tar.gz" "$package/SOURCE-IDENTITY.txt" > "dist/Cutterhoochee_${version}_SOURCE-IDENTITY.txt"
 notices_archive="dist/Cutterhoochee_${version}_notices.tar.gz"
 cp -a "$bundled_notices" "$tmp_notices/"
-install -m 0644 sidecars/manifest.json "$tmp_notices/notices/sidecar-manifest.json"
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner --format=posix --pax-option=delete=atime,delete=ctime -C "$tmp_notices" -cf "${notices_archive%.gz}" notices
 gzip -n -f "${notices_archive%.gz}"
 
