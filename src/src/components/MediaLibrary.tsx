@@ -201,7 +201,7 @@ export const MediaLibrary = memo(function MediaLibrary({
       <div className="panel-heading"><div><p className="eyebrow">Library</p><h2>Media</h2></div><Button variant="secondary" size="icon" aria-label="Import media" title="Import media" onClick={onImport}><FolderPlus aria-hidden="true" /></Button></div>
       <div className="search-box"><Search aria-hidden="true" /><input aria-label="Search media" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search media" /></div>
       <div className="media-list" role="list">
-        {assets.length === 0 ? <div className="empty-panel"><Upload aria-hidden="true" /><strong>{snapshot.document.assets.length === 0 ? "Nothing imported yet" : "No matching media"}</strong><span>{snapshot.document.assets.length === 0 ? "Import footage, audio, or an image to begin." : "Try a different filename."}</span>{snapshot.document.assets.length === 0 ? <Button variant="secondary" size="sm" onClick={onImport}>Import media</Button> : null}</div> : null}
+        {assets.length === 0 ? <div className="empty-panel"><Upload aria-hidden="true" /><strong>{snapshot.document.assets.length === 0 ? "Bring your story in" : "No matching media"}</strong><span>{snapshot.document.assets.length === 0 ? "Drop videos, photos, or audio anywhere in this window. Or choose files below." : "Try a different filename."}</span>{snapshot.document.assets.length === 0 ? <Button variant="secondary" size="sm" onClick={onImport}>Choose files</Button> : null}</div> : null}
         {assets.map((asset) => {
           const normalized = asset.normalization;
           const video = normalized?.video;
@@ -285,7 +285,7 @@ export const MediaLibrary = memo(function MediaLibrary({
               <div className="media-item-title" title={asset.original.fileName}>{asset.original.fileName}</div>
               <div className="media-item-meta">{metadata}</div>
               {!ready ? <div className="asset-warning" role="status"><AlertTriangle aria-hidden="true" />{normalized ? "Media preparation is incomplete." : "Preparing normalized media…"}</div> : thumbnail?.loading ? <div className="asset-warning" role="status">Generating thumbnail…</div> : thumbnailError ? <div className="asset-warning" title={thumbnailError}><AlertTriangle aria-hidden="true" />Thumbnail unavailable.</div> : null}
-              {work ? <div className="media-job-status">
+              {work && work.phase !== "completed" ? <div className="media-job-status">
                 <span role="status">{work.label} · {work.phase.replaceAll("_", " ")}</span>
                 {work.progress !== undefined && !isTerminalActivity(work) ? <progress max={1} value={work.progress} aria-label={`Job progress for ${asset.original.fileName}`} /> : null}
                 {work.error ? <span role="alert">{work.error.message}</span> : null}
@@ -302,7 +302,7 @@ export const MediaLibrary = memo(function MediaLibrary({
           </article>;
         })}
       </div>
-      <div className="panel-footnote"><span className="status-dot" />Assets are managed inside this project. Originals are never deleted.</div>
+      <div className="panel-footnote"><span className="status-dot" />Drop files anywhere to add media. Originals stay untouched.</div>
     </div>
   );
 });

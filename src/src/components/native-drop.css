@@ -1,0 +1,93 @@
+.native-drop-overlay {
+  z-index: 40;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--color-foreground);
+  background: color-mix(in srgb, var(--color-background) 54%, transparent);
+}
+
+.native-drop-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(430px, calc(100vw - 32px));
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+  box-shadow: var(--shadow-panel);
+}
+
+.native-drop-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  color: var(--color-background);
+  background: var(--color-accent);
+}
+
+.native-drop-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.native-drop-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.native-drop-copy strong {
+  color: var(--color-foreground);
+  font-size: 13px;
+}
+
+.native-drop-copy span {
+  color: var(--color-muted-foreground);
+}
+
+.native-drop-processing .native-drop-card,
+.native-drop-info .native-drop-card {
+  border-color: var(--color-border);
+}
+
+.native-drop-error .native-drop-card {
+  border-color: color-mix(in srgb, var(--color-danger) 60%, var(--color-border));
+}
+
+.native-drop-error .native-drop-icon {
+  color: #fff;
+  background: var(--color-danger);
+}
+
+.native-drop-info .native-drop-icon {
+  color: var(--color-accent-strong);
+  background: color-mix(in srgb, var(--color-accent) 18%, var(--color-raised));
+}
+
+.native-drop-overlay:not(.native-drop-dragging) {
+  place-items: end center;
+  padding: 24px;
+  background: transparent;
+}
+.native-drop-overlay:not(.native-drop-dragging) .native-drop-card {
+  pointer-events: auto;
+}
+.native-drop-card .icon-button { flex-shrink: 0; margin-left: auto; }
+@media (prefers-reduced-motion: no-preference) {
+  .native-drop-card { animation: native-drop-arrive 160ms ease-out; }
+}
+@keyframes native-drop-arrive {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

@@ -29,8 +29,8 @@
 <h3 id="was-cutterhoochee-macht">Was Cutterhoochee macht</h3>
 <p>Cutterhoochee verbindet eine klassische, nichtlineare Timeline mit lokal gespeicherten Medienartefakten und einem optionalen Assistenten. Der typische Ablauf ist:</p>
 <ol>
-<li>Ein Projektformat wählen und ein Projekt anlegen.</li>
-<li>Video, Audio oder Bilder über einen nativen Dateidialog importieren.</li>
+<li>Über den zweistufigen Startassistenten ein Projekt anlegen oder einen gespeicherten <code>.cutproj</code>-Ordner öffnen.</li>
+<li>Video, Audio oder Bilder über einen nativen Dateidialog importieren oder externe native Dateien überall im Desktop-Fenster ablegen.</li>
 <li>Warten, bis die Medienvorbereitung abgeschlossen ist.</li>
 <li>Assets auf passende Spuren legen, schneiden, verschieben und trimmen.</li>
 <li>Vorschau, Audiopegel, Titel und Captions prüfen.</li>
@@ -81,37 +81,32 @@
 <p>Oben im Startfenster sehen Sie eine Verbindungsanzeige:</p>
 <ul>
 <li><code>Desktop ready</code>: Die native Desktop-Anbindung ist verfügbar.</li>
-<li><code>Browser preview · native required</code>: Die Oberfläche läuft zwar, aber native Aktionen benötigen eine Desktop-Anbindung. Import, Öffnen, Speichern, Medienvorbereitung, lokale Transkription und Export können in diesem Zustand nicht zuverlässig abgeschlossen werden.</li>
+<li><code>Browser preview · desktop required</code>: Die Oberfläche läuft ohne native Desktop-Anbindung. Sie können die Oberfläche prüfen, aber native Dialoge, Import, Projektpersistenz, Medienvorbereitung, Export und native Anbieter-/Berechtigungsaktionen sind dort nicht verfügbar.</li>
 </ul>
-<p>Der Startbildschirm enthält außerdem den Hinweis <code>Offline by default · no telemetry</code>. Das bedeutet: Es gibt keinen standardmäßigen Telemetrieversand. Eine externe Anbieteranfrage oder ein ausdrücklich genehmigtes Netzwerkwerkzeug ist davon zu unterscheiden.</p>
+<p>Bleibt die Anzeige <code>Browser preview · desktop required</code> nach dem Start der AppImage bestehen, schließen Sie dieses Fenster und starten Sie die eigentliche AppImage statt einer Browser-Vorschau. Eine fehlende Desktop-Bridge wird nicht dadurch behoben, dass Sie den Import im Browser wiederholen.</p>
 <h3 id="neues-projekt-anlegen">Neues Projekt anlegen</h3>
+<p>Klicken Sie im Startbildschirm auf <code>Start a new project</code>. Der Assistent hat zwei Schritte:</p>
 <ol>
-<li><p>Öffnen Sie im Startbildschirm den Bereich <code>New project</code>.</p>
-</li>
-<li><p>Tragen Sie unter <code>Project name</code> einen Namen ein. Wenn das Feld leer bleibt, wird <code>Untitled project</code> verwendet.</p>
-</li>
-<li><p>Wählen Sie unter <code>Aspect</code> eines der verifizierten Formate:</p>
+<li>Unter <code>Choose a visual format</code> wählen Sie eine Formatkarte:
 <ul>
-<li><code>Landscape · 16:9</code></li>
-<li><code>Portrait · 9:16</code></li>
-<li><code>Square · 1:1</code></li>
+<li><code>Vertical video</code> — <code>9:16</code>, <code>1080 × 1920</code>, für <code>Shorts · Reels · TikTok</code></li>
+<li><code>Landscape</code> — <code>16:9</code>, <code>1920 × 1080</code>, für <code>YouTube · film</code></li>
+<li><code>Square</code> — <code>1:1</code>, <code>1080 × 1080</code>, für <code>Social posts</code></li>
 </ul>
 </li>
-<li><p>Wählen Sie unter <code>Frame rate</code> zunächst <code>30 fps</code>. Über <code>Advanced format options</code> werden zusätzlich <code>24 fps</code>, <code>25 fps</code> und <code>60 fps</code> angeboten.</p>
-</li>
-<li><p>Klicken Sie auf <code>Create project</code>.</p>
-</li>
-<li><p>Wählen Sie im nativen Dialog den <strong>übergeordneten Ordner</strong>. Darin wird <code>&lt;Projektname&gt;.cutproj</code> angelegt. Notieren Sie diesen Pfad für späteres Öffnen und Sichern.</p>
-</li>
+<li>Klicken Sie auf <code>Continue to details</code>.</li>
+<li>Unter <code>Name and review your project</code> tragen Sie einen <code>Project name</code> ein. Das Feld beginnt mit <code>Untitled project</code>, aber ein nichtleerer Name ist erforderlich.</li>
+<li><code>Advanced settings</code> ist optional. Dort wählen Sie unter <code>Frame rate</code> standardmäßig <code>30 fps</code>; zusätzlich sind <code>24 fps</code>, <code>25 fps</code> und <code>60 fps</code> verfügbar.</li>
+<li>Prüfen Sie Format, Abmessungen und Framerate, klicken Sie <code>Create project</code> und wählen Sie im nativen Dialog den <strong>übergeordneten Ordner</strong>. Darin wird <code>&lt;Projektname&gt;.cutproj</code> angelegt.</li>
 </ol>
-<p>Cutterhoochee erzeugt dabei ein Projektverzeichnis mit der Endung <code>.cutproj</code>. Die drei anfänglichen Spuren sind eine Video-, eine Audio- und eine Textspur. Der Name und das Format gehören zur Projektdefinition; wählen Sie sie daher vor dem Aufbau der Timeline bewusst.</p>
+<p><code>Back to format</code> bewahrt die ausgewählte Karte und führt zum ersten Schritt zurück. Wird der Ordnerdialog abgebrochen, bleiben Karte, Name und Framerate im Assistenten erhalten. Wählen Sie Format und Framerate vor dem Import; eine spätere Quelle wird in dieses Projektprofil normalisiert und ändert es nicht.</p>
 <h3 id="gespeichertes-projekt-öffnen">Gespeichertes Projekt öffnen</h3>
 <ol>
-<li>Klicken Sie im Bereich <code>Continue editing</code> auf <code>Open project</code>.</li>
-<li>Wählen Sie das gespeicherte <code>.cutproj</code>-Verzeichnis im nativen Dialog.</li>
+<li>Klicken Sie im Startbildschirm auf <code>Open project</code> oder öffnen Sie bei einem bereits geöffneten Projekt das Projektmenü und wählen Sie <code>Open project…</code>.</li>
+<li>Wählen Sie im nativen Ordnerdialog das gespeicherte <code>.cutproj</code>-Verzeichnis, nicht eine beliebige Mediendatei.</li>
 <li>Warten Sie, bis Projektstatus, Bibliothek und Timeline geladen sind.</li>
 </ol>
-<p>Unter <code>Recent projects</code> erscheinen nach Anlegen, Öffnen oder Import zuletzt verwendete <strong>Projektnamen</strong>. Die Liste speichert keine verlässlichen Wiederöffnungspfade: Auch ein Klick auf einen Namen öffnet den allgemeinen Projektauswahldialog. Merken Sie sich den beim Anlegen gewählten Ordner.</p>
+<p>Eine Liste fingierter letzter Projektnamen gibt es nicht. Jede Aktion <code>Open project</code> verwendet den gespeicherten <code>.cutproj</code>-Ordnerdialog; merken Sie sich daher den übergeordneten Ordner für späteres Öffnen und Sichern.</p>
 <p>Wenn bereits ein Projekt geöffnet ist, weist der Startbildschirm darauf hin, dass Sie zum erneuten Verbinden des Startzustands das Desktop-Fenster aktualisieren sollen. Öffnen Sie nicht gleichzeitig dasselbe Projekt schreibend in mehreren Cutterhoochee-Prozessen.</p>
 <hr>
 <h2 id="3-rundgang-durch-den-arbeitsbereich">3. Rundgang durch den Arbeitsbereich</h2>
@@ -121,12 +116,13 @@
 <ul>
 <li>Cutterhoochee- und Projektnamen sowie den lokalen Speicherstatus, typischerweise <code>Saved locally</code>.</li>
 <li><code>Undo</code> und <code>Redo</code> für Projekttransaktionen.</li>
-<li><code>Export</code> zum Öffnen des Exportdialogs. Der Tooltip nennt <code>Export video (Ctrl/Cmd+E)</code>.</li>
-<li><code>Toggle theme</code> zum Wechsel zwischen dunklem und hellem Theme.</li>
-<li><code>Provider settings</code> zum Konfigurieren optionaler Pi-Anbieter.</li>
-<li><code>Close project</code> schließt das aktuelle Projekt. <code>Ctrl/Cmd+S</code> speichert vorher im bereits beim Anlegen gewählten Projektordner; es öffnet keinen „Speichern unter“-Dialog.</li>
+<li>Der Projekttitel öffnet ein Projektmenü mit <code>Open project…</code>, <code>Save project</code> (<code>Ctrl/Cmd+S</code>), dem Wechsel des hellen/dunklen Themes, <code>Provider settings</code> und <code>Close project</code>.</li>
+<li><code>Saved locally</code> beziehungsweise ein aktueller Statushinweis zeigt den letzten lokalen Speicherstatus.</li>
+<li><code>Import</code> öffnet den nativen Medienauswahldialog (auch mit <code>Ctrl/Cmd+I</code>).</li>
+<li><code>Export</code> öffnet <code>Export video</code> (auch mit <code>Ctrl/Cmd+E</code>).</li>
+<li>Der Assistentenschalter blendet mit <code>Hide assistant</code> die rechte Spalte aus; <code>Open assistant</code> blendet sie wieder ein.</li>
 </ul>
-<p><code>Saved locally</code> bezieht sich auf den Projektstand auf diesem Gerät. Es bedeutet nicht, dass ein Cloud-Sync stattfindet.</p>
+<p><code>Saved locally</code> bezieht sich auf den Projektstand auf diesem Gerät. Es bedeutet nicht, dass ein Cloud-Sync stattfindet. Verwenden Sie für wichtige Arbeiten <code>Save project</code> und kopieren Sie das Projektverzeichnis erst nach erfolgreichem Speichern.</p>
 <h3 id="linke-werkzeugspalte">Linke Werkzeugspalte</h3>
 <p>Die Werkzeugspalte hat drei Tabs:</p>
 <ul>
@@ -163,16 +159,17 @@
 <p>Ein Clip zeigt bei vorbereitetem Videomaterial eine Thumbnail-Leiste und bei Audio eine Wellenform. <code>native</code> kennzeichnet eine aus einem verwalteten Artefakt erzeugte Darstellung. Ein fehlendes Vorschaubild bedeutet nicht automatisch, dass das Original gelöscht wurde.</p>
 <h3 id="rechte-assistentenspalte">Rechte Assistentenspalte</h3>
 <p>Die rechte Spalte ist als <code>Assistant chat</code> ausgeführt. Unten steht das Eingabefeld <code>Describe an edit...</code>. Der Assistent kann – je nach verbundenem Anbieter, Modell und ausdrücklicher Evidence-Freigabe – Projektstatus lesen, lokale Evidence anfordern und validierte Projektaktionen vorschlagen oder ausführen. Er erhält nicht automatisch die Originaldatei als Videostream.</p>
-<p>Die Spaltenbreiten lassen sich über die sichtbaren <code>Resize timeline</code>- und <code>Resize assistant</code>-Trenner verändern. Eine eingeklappte rechte Spalte kann über <code>Open assistant</code> wieder geöffnet werden.</p>
+<p>Die Spaltenbreiten lassen sich über die sichtbaren <code>Resize timeline</code>- und <code>Resize assistant</code>-Trenner verändern. <code>Hide assistant</code> in der Kopfzeile klappt die rechte Spalte ein; <code>Open assistant</code> stellt sie wieder her, ohne die Unterhaltung zu ändern.</p>
 <h3 id="theme-wechseln">Theme wechseln</h3>
-<p>Klicken Sie in der Kopfzeile auf <code>Toggle theme</code>. Das Symbol wechselt zwischen Sonne und Mond. Die Einstellung ändert nur die Darstellung des Arbeitsbereichs, nicht Medien, Projektformat oder Exportdaten.</p>
+<p>Klicken Sie im Projektmenü auf den Eintrag zum Wechsel des hellen oder dunklen Themes. Das Symbol wechselt zwischen Sonne und Mond. Die Einstellung ändert nur die Darstellung des Arbeitsbereichs, nicht Medien, Projektformat oder Exportdaten.</p>
 <details class="animation"><summary>GIF-Demonstration anzeigen (ohne Ton)</summary><img loading="lazy" decoding="async" src="assets/theme-switch.gif" alt="GIF des echten Arbeitsbereichs beim Wechsel zwischen Themes"></details>
 <p><em>Abbildung 4: <code>theme-switch.gif</code> zeigt den tatsächlichen Arbeitsbereich, der zwischen den Themes wechselt. Das GIF verwendet weiterhin generiertes Demonstrationsmaterial.</em></p>
 <hr>
 <h2 id="4-projektlebenszyklus">4. Projektlebenszyklus</h2>
 <h3 id="anlegen-bearbeiten-speichern">Anlegen, bearbeiten, speichern</h3>
-<p>Ein neues Projekt beginnt mit einer leeren Timeline und den anfänglichen Spuren. Importierte Assets und alle Clips werden in der Projektdefinition referenziert. Jede akzeptierte Bearbeitung wird als neue Revision gespeichert; der sichtbare Status kehrt danach zu <code>Saved locally</code> zurück.</p>
-<p>Speichern Sie zusätzlich bewusst mit <code>Ctrl/Cmd+S</code>, insbesondere vor größeren Umstrukturierungen, vor dem Beenden und vor einer Sicherung. <code>Ctrl+S</code> gilt unter Linux und Windows, <code>Cmd+S</code> unter macOS.</p>
+<p>Ein neues Projekt beginnt mit einer leeren Timeline und den anfänglichen Spuren. Legen Sie es über <code>Start a new project</code>, die Formatkarte, <code>Continue to details</code> und <code>Name and review your project</code> an. <code>Advanced settings</code> zeigt die Framerate-Auswahl mit <code>30 fps</code> als Standard sowie <code>24 fps</code>, <code>25 fps</code> und <code>60 fps</code>. Nach <code>Create project</code> wählen Sie den übergeordneten Ordner im nativen Dialog; dort entsteht <code>&lt;Projektname&gt;.cutproj</code>.</p>
+<p><code>Back to format</code> bewahrt die bisher eingegebenen Werte. Wird der Ordnerdialog abgebrochen, bleibt der Assistent mit diesen Werten geöffnet. Importierte Assets und alle Clips werden in der Projektdefinition referenziert. Jede akzeptierte Bearbeitung wird als neue Revision gespeichert; der sichtbare Status kehrt danach zu <code>Saved locally</code> zurück.</p>
+<p>Speichern Sie zusätzlich bewusst mit <code>Ctrl/Cmd+S</code> oder über <code>Save project</code> im Projektmenü, insbesondere vor größeren Umstrukturierungen, vor dem Beenden und vor einer Sicherung. <code>Ctrl+S</code> gilt unter Linux und Windows, <code>Cmd+S</code> unter macOS.</p>
 <h3 id="öffnen-und-fortsetzen">Öffnen und fortsetzen</h3>
 <p>Zum Fortsetzen:</p>
 <ol>
@@ -181,7 +178,7 @@
 <li>Klicken Sie die relevanten Clips an und kontrollieren Sie im <code>Inspector</code> Quelle, Timing und Audio.</li>
 <li>Springen Sie in der Timeline an die zuletzt bearbeitete Position.</li>
 </ol>
-<p>Die lokale Liste <code>Recent projects</code> speichert Namen, nicht den Projektinhalt. Ein vollständiges Projekt enthält verwaltete Medienkopien: Sind diese intakt, bleiben Bearbeitung, Vorschau und Export möglich, auch wenn eine ursprüngliche Quelldatei verschoben wurde. <code>Relink</code> wird zur Wiederherstellung fehlender benötigter Medienartefakte benötigt, nicht pauschal nach jedem Umzug.</p>
+<p>Es gibt keine Liste fingierter letzter Projektnamen. <code>Open project</code> öffnet immer den nativen Ordnerdialog; ein vollständiges Projekt enthält verwaltete Medienkopien. Sind diese intakt, bleiben Bearbeitung, Vorschau und Export möglich, auch wenn eine ursprüngliche Quelldatei verschoben wurde. <code>Relink</code> wird zur Wiederherstellung fehlender benötigter Medienartefakte benötigt, nicht pauschal nach jedem Umzug.</p>
 <h3 id="revision-und-konflikte">Revision und Konflikte</h3>
 <p>Projektaktionen werden gegen eine erwartete Revision ausgeführt. Wenn ein anderer Prozess oder ein veraltetes Fenster das Projekt verändert hat, zeigt Cutterhoochee den aktuellen Stand an, statt eine fremde Änderung blind zu überschreiben. Bei einer Konfliktmeldung:</p>
 <ol>
@@ -200,16 +197,16 @@
 <hr>
 <h2 id="5-medienimport-und-bibliothek">5. Medienimport und Bibliothek</h2>
 <h3 id="unterstützte-importarten">Unterstützte Importarten</h3>
-<p>Der Startbildschirm bewirbt <code>Video, audio, PNG, JPEG, or WebP</code>. Die native Medienprüfung akzeptiert außerdem eine begrenzte FFmpeg-Demuxer-/Protokollmenge, darunter gängige Container und Audioquellen wie MOV/MP4-verwandte Quellen, Matroska, AVI, MPEG-TS, MPEG, FLV, OGG, MP3, WAV, FLAC und AAC sowie Bildquellen. Ob eine konkrete Datei decodierbar ist, hängt zusätzlich von ihren tatsächlich enthaltenen Streams und dem gebündelten nativen FFmpeg ab.</p>
-<p>Bei einer Meldung über ein nicht unterstütztes Medium oder einen nicht erlaubten Demuxer kann die Datei nicht verarbeitet werden. Benennen Sie sie nicht lediglich um; verwenden Sie gegebenenfalls eine kompatible, lokal erzeugte Kopie.</p>
+<p>Die native Medienprüfung akzeptiert standalone lokale Medien aus einer begrenzten Allowlist von Demuxern und tatsächlich decodierbaren Streams, darunter gängige Video-/Container-, Audio- und Bildquellen. Ob eine konkrete Datei decodierbar ist, hängt zusätzlich von ihren enthaltenen Streams und dem gebündelten nativen FFmpeg ab.</p>
+<p>Bei einer Meldung über ein nicht unterstütztes Medium oder einen nicht erlaubten Demuxer kann die Datei nicht verarbeitet werden. Benennen Sie sie nicht lediglich um; verwenden Sie gegebenenfalls eine kompatible, lokal erzeugte Kopie. Playlists und Netzwerkmedien wie HLS, DASH, Concat-/Segment-Listen, HTTP oder RTSP sind keine standalone Importquellen.</p>
 <h3 id="import-über-die-oberfläche">Import über die Oberfläche</h3>
 <p>Sie können Medien auf drei Wegen importieren:</p>
 <ol>
-<li>Klicken Sie auf <code>Import media</code> im Startbildschirm oder im Tab <code>Media</code>.</li>
+<li>Klicken Sie im geöffneten Projekt oben auf <code>Import</code> oder im Tab <code>Media</code> auf <code>Import media</code>.</li>
 <li>Drücken Sie <code>Ctrl/Cmd+I</code> außerhalb eines Eingabefelds.</li>
-<li>Ziehen Sie Dateien auf <code>Drop media to import</code> im Startbildschirm beziehungsweise in den vorgesehenen Medienbereich.</li>
+<li>Legen Sie externe native Video-, Foto- oder Audiodateien überall im Desktop-Fenster ab.</li>
 </ol>
-<p>Der native Dateidialog beziehungsweise die native Dateifreigabe legt fest, welche Dateien Cutterhoochee lesen darf. Ein Import ohne eine gültige Dateifreigabe wird nicht durch einen frei eingegebenen Pfad umgangen.</p>
+<p>Der native Dateidialog beziehungsweise die native Dateifreigabe legt fest, welche Dateien Cutterhoochee lesen darf. Bei einem Drop autorisiert die native Laufzeit genau die abgelegten Pfade; bestätigen Sie nur die angezeigte Dateifreigabe, falls eine Anfrage erscheint. Ein Browser-Drop oder ein frei eingegebener Pfad umgeht diese Autorisierung nicht.</p>
 <blockquote>
 <p><strong>Achtung – Dateizugriff:</strong> Wählen Sie nur die Dateien und Verzeichnisse aus, die Sie wirklich verwenden möchten. Eine Importfreigabe ist keine pauschale Berechtigung für das gesamte Dateisystem.</p>
 </blockquote>
@@ -356,7 +353,7 @@
 <li><code>Scale · bp</code>: Skalierung von <code>100</code> bis <code>40000</code>; <code>10000</code> entspricht 100 %, <code>5000</code> entspricht 50 % der eingepassten Größe.</li>
 <li><code>Opacity · bp</code>: Deckkraft von <code>0</code> (unsichtbar) bis <code>10000</code> (vollständig deckend); <code>5000</code> entspricht 50 %.</li>
 </ul>
-<p>Bearbeiten Sie Positionen mit Bedacht, besonders bei <code>Portrait · 9:16</code>: Eine im Querformat gut sichtbare Position kann im Hochformat außerhalb des sicheren sichtbaren Bereichs liegen.</p>
+<p>Bearbeiten Sie Positionen mit Bedacht, besonders bei <code>Vertical video</code> (<code>9:16</code>): Eine im Querformat gut sichtbare Position kann im Hochformat außerhalb des sicheren sichtbaren Bereichs liegen.</p>
 <h4 id="audio"><code>Audio</code></h4>
 <p>Bei einem Clip auf einer Video- oder Audiospur bietet der Abschnitt <code>Audio</code>:</p>
 <ul>
@@ -478,8 +475,8 @@ Los geht es.
 <li><code>Bereite einen Export der aktuellen Revision in 720p mit SRT-Sidecar vor, aber starte ihn erst nach meiner Bestätigung.</code></li>
 </ul>
 <p>Der Assistent soll seine Aktionen auf validierte Projektoperationen abbilden. Bei unklarer Auswahl, einer veralteten Revision oder einer fehlenden Quelle kann die native Schicht die Aktion ablehnen. Prüfen Sie die Timeline danach trotzdem selbst.</p>
-<p><strong>Activity → Native work</strong> zeigt native Aktionen, betroffene Ziele, bestätigte Projektänderungen, wartende Freigaben und Hintergrundaufträge. Eine Job-ID bedeutet, dass Arbeit gestartet wurde, nicht dass sie abgeschlossen ist. <strong>Cancel</strong> fordert einen Abbruch an; Endzustand und Fehler stammen vom nativen Auftrag. <strong>Stop</strong> macht bereits bestätigte Änderungen nicht rückgängig.</p>
-<p>Aktivitätshervorhebungen sind von Ihrer Auswahl getrennt. Lesezugriffe markieren untersuchte Ziele kurz; bestätigte Änderungen können den betroffenen Bereich, die vorherige Clipposition oder Vorher-/Nachher-Werte im Inspector zeigen. Dry Runs zeigen keine Animation einer bestätigten Änderung. Große Änderungen werden mit begrenzten Hervorhebungen gebündelt. <strong>Show</strong> macht ein Ziel außerhalb der Ansicht ausdrücklich auffindbar, ohne es auszuwählen oder die Wiedergabe zu starten. Aktivität allein übernimmt weder Fokus noch Scrollposition oder Playhead; die Einstellung für reduzierte Bewegung wird beachtet.</p>
+<p><strong>Activity → Native work</strong> zeigt native Aktionen, betroffene Ziele, bestätigte Projektänderungen, wartende Freigaben und Hintergrundaufträge. Nicht abgeschlossene Vorgänge und fehlgeschlagene Rückmeldungen bleiben standardmäßig sichtbar; abgeschlossene und abgebrochene Einträge liegen hinter <code>Show history (N)</code>, das den Aktivitätsverlauf aufklappt. Eine Job-ID bedeutet, dass Arbeit gestartet wurde, nicht dass sie abgeschlossen ist. <strong>Cancel</strong> fordert einen Abbruch an; Endzustand und Fehler stammen vom nativen Auftrag. <strong>Stop</strong> macht bereits bestätigte Änderungen nicht rückgängig.</p>
+<p>Aktivitätshervorhebungen sind von Ihrer Auswahl getrennt. Lesezugriffe markieren untersuchte Ziele kurz; bestätigte Änderungen können den betroffenen Bereich, die vorherige Clipposition oder Vorher-/Nachher-Werte im Inspector zeigen. Dry Runs zeigen keine Animation einer bestätigten Änderung. Große Änderungen werden mit begrenzten Hervorhebungen gebündelt. <strong>Show</strong> macht ein Ziel außerhalb der Ansicht ausdrücklich auffindbar, ohne es auszuwählen oder die Wiedergabe zu starten. Aktivität allein übernimmt nicht Fokus, Scrollposition oder Playhead; Einstellungen für reduzierte Bewegung werden respektiert.</p>
 <p>Ausdrückliche Wiedergabe-, Pause- und Seek-Aufträge des Assistenten verwenden den sichtbaren Player und warten auf dessen Bestätigung. Untersuchen und andere reine Lesezugriffe starten die Wiedergabe nicht neu. Eine bestätigte Zeitbereichsauswahl bleibt sichtbar, bis eine andere Auswahl sie ersetzt. Prüfen Sie vor einem erneuten Versuch die tatsächliche Revision und das native Ergebnis: Ein späterer Abbruch bedeutet nicht, dass eine frühere Änderung zurückgerollt wurde.</p>
 <h3 id="evidence-und-direkte-videodaten">Evidence und direkte Videodaten</h3>
 <p>Ein Sprachmodell erhält nicht automatisch das native Videomedium. Pi kann lokale, vom Projekt erzeugte Evidence anfordern, beispielsweise:</p>
@@ -564,7 +561,7 @@ Los geht es.
 <li><code>1080p</code> mit der zum Aspect passenden Abmessung,</li>
 <li><code>720p</code> mit der zum Aspect passenden Abmessung.</li>
 </ul>
-<p>Für <code>Portrait · 9:16</code> führt <code>1080p</code> beispielsweise zu <code>1080 × 1920</code>; für <code>Landscape · 16:9</code> zu einer entsprechenden Querformatgröße.</p>
+<p>Für <code>Vertical video</code> (<code>9:16</code>) führt <code>1080p</code> beispielsweise zu <code>1080 × 1920</code>; für <code>Landscape</code> (<code>16:9</code>) zu einer entsprechenden Querformatgröße.</p>
 <h3 id="export-starten">Export starten</h3>
 <ol>
 <li>Prüfen Sie die angezeigte Revision und die Zielabmessungen.</li>
@@ -646,7 +643,7 @@ Los geht es.
 </tr>
 <tr>
 <td><code>Ctrl/Cmd+I</code></td>
-<td><code>Import media</code> öffnen</td>
+<td><code>Import</code> öffnen</td>
 <td>Native Dateifreigabe erforderlich.</td>
 </tr>
 <tr>
@@ -702,10 +699,12 @@ Los geht es.
 <h3 id="131-projekt-anlegen">13.1 Projekt anlegen</h3>
 <ol>
 <li>Starten Sie Cutterhoochee und prüfen Sie <code>Desktop ready</code>.</li>
-<li>Geben Sie unter <code>Project name</code> <code>Sommergruß</code> ein.</li>
-<li>Wählen Sie <code>Portrait · 9:16</code>.</li>
-<li>Lassen Sie <code>30 fps</code> eingestellt.</li>
-<li>Klicken Sie <code>Create project</code>.</li>
+<li>Klicken Sie im Startbildschirm auf <code>Start a new project</code>.</li>
+<li>Wählen Sie unter <code>Choose a visual format</code> die Karte <code>Vertical video</code> (<code>9:16</code>, <code>1080 × 1920</code>) für <code>Shorts · Reels · TikTok</code>.</li>
+<li>Klicken Sie <code>Continue to details</code>.</li>
+<li>Tragen Sie unter <code>Name and review your project</code> <code>Sommergruß</code> als <code>Project name</code> ein.</li>
+<li>Lassen Sie <code>Advanced settings</code> geschlossen und prüfen Sie die standardmäßige <code>Frame rate</code> <code>30 fps</code>.</li>
+<li>Klicken Sie <code>Create project</code>, wählen Sie den übergeordneten Ordner im nativen Dialog und merken Sie sich den Pfad zu <code>Sommergruß.cutproj</code>.</li>
 <li>Prüfen Sie, dass <code>Main Video</code>, <code>Main Audio</code> und <code>Text</code> in der Timeline erscheinen.</li>
 </ol>
 <h3 id="132-video-und-ton-importieren">13.2 Video und Ton importieren</h3>
@@ -786,8 +785,8 @@ Los geht es.
 </ol>
 <hr>
 <h2 id="14-fehlerbehebung">14. Fehlerbehebung</h2>
-<h3 id="startbildschirm-zeigt-browser-preview--native-required">Startbildschirm zeigt <code>Browser preview · native required</code></h3>
-<p>Die Weboberfläche ist geladen, aber die native Bridge ist nicht verfügbar. Starten Sie die verifizierte Linux-x64-AppImage-Datei als Desktop-Anwendung erneut. Verwenden Sie keine Browser-URL als Ersatz für die nativen Projekt-, Datei- und Exportaktionen.</p>
+<h3 id="startbildschirm-zeigt-browser-preview--desktop-required">Startbildschirm zeigt <code>Browser preview · desktop required</code></h3>
+<p>Die Weboberfläche ist geladen, aber die native Desktop-Bridge ist nicht verfügbar. Starten Sie die verifizierte Linux-x64-AppImage-Datei als Desktop-Anwendung erneut. Verwenden Sie keine Browser-URL als Ersatz für die nativen Projekt-, Datei- und Exportaktionen.</p>
 <h3 id="appimage-startet-aber-das-desktopfenster-bleibt-leer">AppImage startet, aber das Desktopfenster bleibt leer</h3>
 <p>Das ist von einem funktionierenden automatisierten WebView zu unterscheiden. Prüfen Sie:</p>
 <ol>
@@ -798,7 +797,7 @@ Los geht es.
 </ol>
 <p>Die Linux-Qualifikation wurde auf NVIDIA-Hardware durchgeführt; ein systemweiter Grafiktreiber- oder Compositor-Fehler ist nicht automatisch ein Cutterhoochee-Projektfehler. Windows- und macOS-Startpfade sind nicht verifiziert.</p>
 <h3 id="media-import-was-cancelled"><code>Media import was cancelled</code></h3>
-<p>Der native Dialog wurde geschlossen oder es wurde keine Datei ausgewählt. Starten Sie <code>Import media</code> erneut und bestätigen Sie eine Datei. Bei einem manuellen Drag-and-drop müssen die Pfade vom Desktop an die native Bridge übergeben werden können.</p>
+<p>Der native Dialog wurde geschlossen oder es wurde keine Datei ausgewählt. Starten Sie <code>Import</code> oder <code>Import media</code> erneut und bestätigen Sie eine Datei. Externe native Video-, Foto- oder Audiodateien können Sie auch überall in das Desktop-Fenster ziehen; die native Bridge autorisiert dabei genau die abgelegten Pfade.</p>
 <h3 id="ein-medium-wird-als-nicht-unterstützt-abgelehnt">Ein Medium wird als nicht unterstützt abgelehnt</h3>
 <p>Prüfen Sie:</p>
 <ul>
@@ -926,7 +925,7 @@ Los geht es.
 <li><strong>UI-Sprache:</strong> Die UI ist Englisch. Eine deutsche Lokalisierung der Controls wird nicht behauptet.</li>
 <li><strong>Native Bridge:</strong> Für Projekt-, Datei-, Medien-, Transkriptions- und Exportaktionen ist die native Desktop-Anbindung erforderlich.</li>
 <li><strong>Medienformate:</strong> Der native Import ist auf eine Allowlist von Demuxern/Protokollen und die tatsächlich vorhandenen decodierbaren Streams begrenzt.</li>
-<li><strong>Projektprofile:</strong> Die Startoberfläche bietet 16:9, 9:16 und 1:1 sowie 24, 25, 30 und 60 fps (die zusätzlichen Frameraten erscheinen unter <code>Advanced format options</code>).</li>
+<li><strong>Projektprofile:</strong> Die Startoberfläche bietet die Karten <code>Vertical video</code> (9:16, 1080 × 1920), <code>Landscape</code> (16:9, 1920 × 1080) und <code>Square</code> (1:1, 1080 × 1080) sowie 24, 25, 30 und 60 fps (<code>30 fps</code> als Standard, weitere Werte unter <code>Advanced settings</code>).</li>
 <li><strong>Audio:</strong> Normalisiertes Audio ist für die lokale Transkription erforderlich; Standbilder besitzen kein Clip-Audio.</li>
 <li><strong>Stummschaltung:</strong> Track-<code>Mute</code> schaltet den Audiobeitrag dieser Spur in Vorschau und Export stumm; bei einer Videospur bleibt das Bild sichtbar. <code>Clip audio</code> deaktiviert den Ton sowohl von Video- als auch von Audioclips.</li>
 <li><strong>Übergänge:</strong> Der verifizierte Übergang ist <code>Dissolve</code> auf Videospuren mit zwei passenden Clips. Vor dem Split muss er entfernt werden.</li>

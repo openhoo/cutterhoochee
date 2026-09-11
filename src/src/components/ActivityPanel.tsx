@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, CircleStop, Clock3, Eye, Loader2, ShieldAlert, UserRound, Wrench } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, CircleStop, Clock3, Eye, Loader2, ShieldAlert, UserRound, Wrench } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 
 import type { EditorClient } from "@cutterhoochee/shared";
@@ -69,10 +69,20 @@ export function ActivityPanel({ client, store, onReveal }: ActivityPanelProps) {
   const activities = useAgentActivities(store);
   const [canceling, setCanceling] = useState<ReadonlySet<string>>(() => new Set());
   const [cancelNotes, setCancelNotes] = useState<Record<string, string>>({});
+  const [historyOpen, setHistoryOpen] = useState(false);
   const revealSequence = useRef(0);
   const context = client.getContext();
-  const hasActive = activities.some((activity) => !isTerminalActivity(activity));
   const currentScope = `${context.generation}:${context.projectId ?? ""}`;
+
+  const foregroundActivities = useMemo(
+    () => activities.filter((activity) => !isTerminalActivity(activity) || activity.phase === "failed"),
+    [activities],
+  );
+  const historyActivities = useMemo(
+    () => activities.filter((activity) => isTerminalActivity(activity) && activity.phase !== "failed"),
+    [activities],
+  );
+  const hasActive = foregroundActivities.some((activity) => !isTerminalActivity(activity));
 
   useEffect(() => {
     let disposed = false;
@@ -135,7 +145,33 @@ export function ActivityPanel({ client, store, onReveal }: ActivityPanelProps) {
     }
   }, [client]);
 
-  const orderedActivities = useMemo(() => activities, [activities]);
+  const renderActivity = (activity: (typeof activities)[number]) => {
+    const progress = progressValue(activity.progress);
+    const error = activityError(activity);
+    const canCancel = !isTerminalActivity(activity) && activity.jobIds.length > 0;
+    const shownTargetCount = Math.min(activity.targets.length, activity.totalTargets);
+    return <article className={`activity-entry activity-entry-${activity.phase}`} key={activity.id}>
+      <div className="activity-entry-heading">
+        <span className="activity-entry-kind">{activity.origin === "agent" ? <Wrench aria-hidden="true" /> : <UserRound aria-hidden="true" />}{activity.origin === "agent" ? "Agent" : "You"}</span>
+        <span className={`activity-phase activity-phase-${activity.phase}`}>{activity.phase === "running" || activity.phase === "queued" || activity.phase === "cancelling" ? <Loader2 className="spin" aria-hidden="true" /> : activity.phase === "failed" ? <AlertCircle aria-hidden="true" /> : activity.phase === "awaiting_approval" ? <ShieldAlert aria-hidden="true" /> : <Check aria-hidden="true" />}{PHASE_LABEL[activity.phase] ?? activity.phase}</span>
+      </div>
+      <strong className="activity-entry-label">{activityText(activity)}</strong>
+      <div className="activity-entry-meta">
+        <span>{activityKindLabel(activity)}</span>
+        <span>{shownTargetCount < activity.totalTargets ? `${shownTargetCount} of ${activity.totalTargets} targets` : `${activity.totalTargets} ${activity.totalTargets === 1 ? "target" : "targets"}`}</span>
+      </div>
+      {activity.phase === "awaiting_approval" ? <p className="activity-entry-note">Approval is required before this operation can run.</p> : null}
+      {activity.message ? <p className="activity-entry-note">{activity.message}</p> : null}
+      {error ? <p className="activity-entry-error" role="alert"><AlertCircle aria-hidden="true" />{error}</p> : null}
+      {progress !== null && !isTerminalActivity(activity) ? <div className="activity-progress" aria-label={`${Math.round(progress * 100)} percent complete`}><div className="progress-track"><span style={{ width: `${Math.round(progress * 100)}%` }} /></div><span>{Math.round(progress * 100)}%</span></div> : null}
+      {activity.jobIds.length > 0 ? <div className="activity-jobs"><span>{activity.jobIds.length === 1 ? "1 native job" : `${activity.jobIds.length} native jobs`}</span>{canCancel ? activity.jobIds.map((jobId: string) => <Button key={jobId} variant="ghost" size="sm" disabled={canceling.has(jobId)} onClick={() => void cancelJob(activity.id, jobId)}>{canceling.has(jobId) ? <Loader2 className="spin" aria-hidden="true" /> : <CircleStop aria-hidden="true" />}Cancel</Button>) : null}</div> : null}
+      {cancelNotes[activity.id] ? <p className="activity-entry-note">{cancelNotes[activity.id]}</p> : null}
+      <div className="activity-entry-footer">
+        <span className="activity-target-summary">{shownTargetCount > 0 ? `${TARGET_LABEL[activity.targets[0]?.kind] ?? "item"}${shownTargetCount > 1 ? ` +${shownTargetCount - 1}` : ""}` : "No highlighted target"}</span>
+        {activity.targets.length > 0 ? <Button className="activity-reveal" variant="secondary" size="sm" onClick={() => onReveal({ requestId: ++revealSequence.current, activityId: activity.id, targets: activity.targets })}><Eye aria-hidden="true" />Show</Button> : null}
+      </div>
+    </article>;
+  };
 
   return <section className="activity-panel" aria-label="Activity">
     <div className="activity-panel-header">
@@ -146,34 +182,22 @@ export function ActivityPanel({ client, store, onReveal }: ActivityPanelProps) {
       {hasActive ? <span className="activity-live"><Loader2 className="spin" aria-hidden="true" />Live</span> : null}
     </div>
     <p className="sr-only" role="status">{activities[0] ? `${activities[0].label}: ${PHASE_LABEL[activities[0].phase]}. ${activities[0].totalTargets} targets.` : ""}</p>
-    {orderedActivities.length === 0 ? <div className="activity-empty"><Clock3 aria-hidden="true" /><span>Agent and media work will appear here with its real status.</span></div> : <div className="activity-list">
-      {orderedActivities.map((activity) => {
-        const progress = progressValue(activity.progress);
-        const error = activityError(activity);
-        const canCancel = !isTerminalActivity(activity) && activity.jobIds.length > 0;
-        const shownTargetCount = Math.min(activity.targets.length, activity.totalTargets);
-        return <article className={`activity-entry activity-entry-${activity.phase}`} key={activity.id}>
-          <div className="activity-entry-heading">
-            <span className="activity-entry-kind">{activity.origin === "agent" ? <Wrench aria-hidden="true" /> : <UserRound aria-hidden="true" />}{activity.origin === "agent" ? "Agent" : "You"}</span>
-            <span className={`activity-phase activity-phase-${activity.phase}`}>{activity.phase === "running" || activity.phase === "queued" || activity.phase === "cancelling" ? <Loader2 className="spin" aria-hidden="true" /> : activity.phase === "failed" ? <AlertCircle aria-hidden="true" /> : activity.phase === "awaiting_approval" ? <ShieldAlert aria-hidden="true" /> : <Check aria-hidden="true" />}{PHASE_LABEL[activity.phase] ?? activity.phase}</span>
-          </div>
-          <strong className="activity-entry-label">{activityText(activity)}</strong>
-          <div className="activity-entry-meta">
-            <span>{activityKindLabel(activity)}</span>
-            <span>{shownTargetCount < activity.totalTargets ? `${shownTargetCount} of ${activity.totalTargets} targets` : `${activity.totalTargets} ${activity.totalTargets === 1 ? "target" : "targets"}`}</span>
-          </div>
-          {activity.phase === "awaiting_approval" ? <p className="activity-entry-note">Approval is required before this operation can run.</p> : null}
-          {activity.message ? <p className="activity-entry-note">{activity.message}</p> : null}
-          {error ? <p className="activity-entry-error" role="alert"><AlertCircle aria-hidden="true" />{error}</p> : null}
-          {progress !== null && !isTerminalActivity(activity) ? <div className="activity-progress" aria-label={`${Math.round(progress * 100)} percent complete`}><div className="progress-track"><span style={{ width: `${Math.round(progress * 100)}%` }} /></div><span>{Math.round(progress * 100)}%</span></div> : null}
-          {activity.jobIds.length > 0 ? <div className="activity-jobs"><span>{activity.jobIds.length === 1 ? "1 native job" : `${activity.jobIds.length} native jobs`}</span>{canCancel ? activity.jobIds.map((jobId: string) => <Button key={jobId} variant="ghost" size="sm" disabled={canceling.has(jobId)} onClick={() => void cancelJob(activity.id, jobId)}>{canceling.has(jobId) ? <Loader2 className="spin" aria-hidden="true" /> : <CircleStop aria-hidden="true" />}Cancel</Button>) : null}</div> : null}
-          {cancelNotes[activity.id] ? <p className="activity-entry-note">{cancelNotes[activity.id]}</p> : null}
-          <div className="activity-entry-footer">
-            <span className="activity-target-summary">{shownTargetCount > 0 ? `${TARGET_LABEL[activity.targets[0]?.kind] ?? "item"}${shownTargetCount > 1 ? ` +${shownTargetCount - 1}` : ""}` : "No highlighted target"}</span>
-            {activity.targets.length > 0 ? <Button className="activity-reveal" variant="secondary" size="sm" onClick={() => onReveal({ requestId: ++revealSequence.current, activityId: activity.id, targets: activity.targets })}><Eye aria-hidden="true" />Show</Button> : null}
-          </div>
-        </article>;
-      })}
-    </div>}
+    {activities.length === 0 ? <div className="activity-empty"><Clock3 aria-hidden="true" /><span>Agent and media work will appear here with its real status.</span></div> : <>
+      {foregroundActivities.length > 0 ? <div className="activity-list">{foregroundActivities.map(renderActivity)}</div> : null}
+      {historyActivities.length > 0 ? <div className="activity-history">
+        <button
+          className="activity-history-toggle"
+          type="button"
+          aria-expanded={historyOpen}
+          aria-controls="activity-history-list"
+          onClick={() => setHistoryOpen((open) => !open)}
+        >
+          <ChevronRight className={historyOpen ? "activity-history-chevron activity-history-chevron--open" : "activity-history-chevron"} aria-hidden="true" />
+          <span>{historyOpen ? "Hide history" : "Show history"}</span>
+          <span className="activity-history-count">({historyActivities.length})</span>
+        </button>
+        <div className="activity-list activity-history-list" id="activity-history-list" hidden={!historyOpen}>{historyActivities.map(renderActivity)}</div>
+      </div> : null}
+    </>}
   </section>;
 }

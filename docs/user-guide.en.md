@@ -29,8 +29,8 @@ Cutterhoochee is a local-first desktop video editor. This guide describes the co
 
 Cutterhoochee combines a project document, a normalized media library, a frame-based timeline, a native preview/export renderer, local speech evidence, and an optional Pi-powered assistant. The normal working loop is:
 
-1. Create or open a `.cutproj` project.
-2. Import video, audio, or still images through the native file dialog (or drop files onto **Drop media to import**).
+1. Start a new project through the two-step wizard, or open a saved `.cutproj` folder.
+2. Import video, audio, or still images through a native chooser, or drop external native files anywhere in the desktop window.
 3. Wait for each asset to finish media preparation.
 4. Add prepared assets to a video or audio track.
 5. Edit clips, titles, transitions, audio properties, and captions in the timeline and **Inspector**.
@@ -98,20 +98,24 @@ This guide does not assert a Windows or macOS installation procedure: those pack
 The start screen shows a badge in the top bar:
 
 - **Desktop ready** means the native bridge is available for the desktop operations described in this guide.
-- **Browser preview · native required** means the UI is running without the native bridge. You may inspect the interface, but native dialogs, imports, project persistence, normalized media, export, and native provider/permission operations are not available there.
+- **Browser preview · desktop required** means the UI is running without the native desktop bridge. You may inspect the interface, but native dialogs, imports, project persistence, normalized media, export, and native provider/permission operations are not available there.
 
-If the badge remains **Browser preview · native required** after launching the AppImage, close that window and start the actual AppImage rather than a browser development preview. A blank or missing native bridge is not fixed by retrying an import in the browser.
+If the badge remains **Browser preview · desktop required** after launching the AppImage, close that window and start the actual AppImage rather than a browser development preview. A missing desktop bridge is not fixed by retrying an import in the browser.
 
 ### 2.3 Choose a project format
 
-On the start screen, **New project** provides:
+On the start screen, click **Start a new project**. The setup is a two-step wizard:
 
-- **Project name** — defaults to `Untitled project` if left empty.
-- **Aspect** — **Landscape · 16:9**, **Portrait · 9:16**, or **Square · 1:1**.
-- **Frame rate** — **30 fps** by default. Expand **Advanced format options** to choose **24 fps**, **25 fps**, or **60 fps**.
-- **Create project** — opens a native parent-folder chooser and creates `<project-name>.cutproj` inside the chosen folder.
+1. On **Choose a visual format**, select one of the visual format cards:
+   - **Vertical video** — **9:16**, **1080 × 1920**, for **Shorts · Reels · TikTok**.
+   - **Landscape** — **16:9**, **1920 × 1080**, for **YouTube · film**.
+   - **Square** — **1:1**, **1080 × 1080**, for **Social posts**.
+2. Click **Continue to details**.
+3. On **Name and review your project**, enter **Project name**. The field starts with `Untitled project`, but a non-empty name is required.
+4. **Advanced settings** is optional. Open it to review **Frame rate**; **30 fps** is selected by default, with **24 fps**, **25 fps**, and **60 fps** also available.
+5. Review the format, dimensions, and frame rate, click **Create project**, and choose the **parent folder** in the native dialog. Cutterhoochee creates `<project-name>.cutproj` inside that folder.
 
-Choose the aspect and frame rate before importing. The native project profile supports exactly 16:9, 9:16, or 1:1 dimensions and 24/1, 25/1, 30/1, or 60/1 frame rates. A later source file is normalized into this profile; it does not change the project’s frame rate.
+**Back to format** preserves the selected card and returns to the first step. Cancelling the parent-folder chooser leaves the wizard values in place so you can try again. Choose the format and frame rate before importing; a later source file is normalized into this project profile and does not change it.
 
 ## 3. Workspace tour
 
@@ -122,15 +126,14 @@ When a project is open, the editor has three main regions and a top bar.
 From left to right, the top bar includes:
 
 - **Toggle media pane** — collapses or restores the left pane.
-- The Cutterhoochee mark and project name button — the project name button opens another project location.
+- The project title button — opens a project menu with **Open project…**, **Save project** (`Ctrl/Cmd+S`), the light/dark theme switch, **Provider settings**, and **Close project**.
 - **Saved locally** or a current status notice — indicates the latest local save status.
 - **Undo** and **Redo** — project-history actions.
+- **Import** — opens the native media chooser (also `Ctrl/Cmd+I`).
 - **Export** — opens **Export video** (also `Ctrl/Cmd+E`).
-- **Toggle theme** — switches between dark and light UI.
-- **Provider settings** — opens provider connections and model selection.
-- **Close project** — closes the open project and returns to the start screen.
+- The assistant pane toggle — **Hide assistant** collapses the right pane; **Open assistant** restores it.
 
-The save indicator is not a substitute for a backup. For important work, use **Save** and copy the project directory only after the save has completed.
+The save indicator is not a substitute for a backup. For important work, use **Save project** and copy the project directory only after the save has completed.
 
 ### 3.2 Left pane: Project tools
 
@@ -165,9 +168,7 @@ The timeline header says **Edit**, **Timeline**, and the current duration. It pr
 
 Below the ruler are track rows. A new project starts with **Main Video**, **Main Audio**, and **Text** tracks. Projects may also contain additional tracks (for example, an **Overlay** video track). Each track has mute and lock controls. The ruler also acts as a range-selection surface: click to put the playhead at a frame, or drag to select a range.
 
-### 3.5 Right pane: Assistant chat
-
-The right pane is **Assistant chat**. It can display assistant messages, tool cards, status, usage information, and **tool updates**. The composer is labeled **Describe an edit…**. **Enter** sends a prompt; **Shift+Enter** inserts a new line. If the assistant is running, **Stop** requests cancellation. **New assistant session** clears the conversation and starts a fresh Pi session.
+The right pane is **Assistant chat**. It can display assistant messages, tool cards, status, usage information, and **tool updates**. The composer is labeled **Describe an edit…**. **Enter** sends a prompt; **Shift+Enter** inserts a new line. If the assistant is running, **Stop** requests cancellation. **New assistant session** clears the conversation and starts a fresh Pi session. Use the top-bar **Hide assistant** control to collapse the pane; **Open assistant** restores it without changing the conversation.
 
 ![Animated full-workspace theme switch between dark and light.](assets/theme-switch.gif)
 
@@ -177,28 +178,33 @@ The right pane is **Assistant chat**. It can display assistant messages, tool ca
 
 ### 4.1 Create a project
 
-1. On the start screen, fill in **Project name**.
-2. Select **Aspect** and **Frame rate**. Use **Advanced format options** if you need 24, 25, or 60 fps.
-3. Click **Create project**.
-4. Choose the **parent folder** in the native dialog. Cutterhoochee creates `<project-name>.cutproj` inside it. Remember this full path for reopening and backup.
-5. Wait for the editor to load and confirm the top bar reports local saving.
+1. On the start screen, click **Start a new project**.
+2. Choose **Vertical video** (**9:16**, **1080 × 1920**), **Landscape** (**16:9**, **1920 × 1080**), or **Square** (**1:1**, **1080 × 1080**).
+3. Click **Continue to details**.
+4. Enter **Project name** on **Name and review your project**. Open optional **Advanced settings** only if you want to change **Frame rate** from its **30 fps** default to **24 fps**, **25 fps**, or **60 fps**.
+5. Review the summary, click **Create project**, and choose the **parent folder** in the native dialog. Cutterhoochee creates `<project-name>.cutproj` inside it. Remember this full path for reopening and backup.
+6. Wait for the editor to load and confirm the top bar reports local saving.
+
+Use **Back to format** to revisit the visual card; the card, name, and frame-rate values remain available. If the parent-folder chooser is cancelled, no project is created and the entered values remain in the wizard.
 
 The initial document has revision `0`, an empty asset list, and the default video, audio, and text tracks. The project profile is immutable for the operations exposed by the current UI; choose the format carefully before building a timeline.
 
 ### 4.2 Open an existing project
 
-1. From the start screen, click **Open project** (or a name under **Recent projects**).
-2. Select the saved `.cutproj` directory, not an arbitrary media file.
+1. From the start screen, click **Open project**, or open the project-title menu in an existing workspace and choose **Open project…**.
+2. Select the saved `.cutproj` directory in the native folder chooser, not an arbitrary media file.
 3. Wait for **Opening project…** to finish.
 4. Confirm that the expected project name, assets, and timeline appear.
 
-**Recent projects** retains recent names, not dependable reopen paths. Clicking a recent name still opens the generic folder chooser. The list is updated by create/open/import workflows; it is not a backup or a way to discover a forgotten project path.
+There is no recent-name list to reopen a project. Each **Open project** action uses the saved `.cutproj` folder chooser, so keep the parent-folder path for future access and backups.
 
 A project is a directory containing `project.json` and app-managed media/artifact directories. The native store acquires a project lock; opening the same project concurrently is not a supported collaboration mode. Close the other editor instance before opening the directory again.
 
 ### 4.3 Import from the start screen
 
-**Import media** on the start screen can create a project with the current start-screen format if none is open, then opens a native media chooser. You can also drag files onto **Drop media to import**. After import, the application returns to the project view and displays preparation status.
+On the welcome screen, drop external native video, photo, or audio files anywhere in the desktop window. Cutterhoochee creates a project with the default **Landscape** profile (**16:9**, **30 fps**), opens the native parent-folder chooser, and then imports the dropped files. If you need a different format or frame rate, create the project first through **Start a new project**; the welcome drop path does not choose a custom profile.
+
+With a project open, external native file drops work anywhere in the desktop window and add the files to that project. The native runtime owns authorization for the exact dropped paths; approve only the files presented by the native operation when a permission request appears. Browser drops and typed paths do not bypass this authorization.
 
 ### 4.4 Save and close
 
@@ -221,17 +227,18 @@ The native probe accepts standalone local media from these demuxer families:
 - Audio families: MP3, WAV, FLAC, AAC, OGG/Opus, and related standalone audio streams.
 - Still-image families: PNG, JPEG, and WebP image sequences/files exposed as a still image.
 
-The visible start-screen drop hint names **Video, audio, PNG, JPEG, or WebP**. The native allowlist is the authority, so a filename extension alone does not guarantee import. Playlists and network media are explicitly rejected: HLS, DASH, concat/segment/playlist inputs, HTTP, RTSP, and similar network sources cannot be imported as a standalone asset.
+The visible import controls accept local files, while the native allowlist remains the authority: a filename extension alone does not guarantee import. Playlists and network media are explicitly rejected: HLS, DASH, concat/segment/playlist inputs, HTTP, RTSP, and similar network sources cannot be imported as a standalone asset.
 
 Do not import a directory, playlist, URL, or a file whose contents do not match its media metadata. Import is a native, permission-gated operation on an absolute local path.
 
-### 5.2 Import through **Media**
+### 5.2 Import through **Media** or native file drops
 
-1. Open the **Media** tab.
-2. Click the folder button labeled **Import media**.
-3. In the native chooser, select one or more local files.
-4. Confirm the file permission request if shown.
-5. Wait while each item changes from **Preparing normalized media…** to a ready asset.
+1. With a project open, click the top-bar **Import** button or open the **Media** tab and click **Import media**.
+2. In the native chooser, select one or more local files.
+3. Confirm the file permission request if shown.
+4. Wait while each item changes from **Preparing normalized media…** to a ready asset.
+
+You can also release external native files anywhere in the desktop window. The native runtime authorizes the exact dropped paths; accept only the presented file grant if one appears. A browser file drop or a manually typed path is not an alternate import route.
 
 You can also drag an asset card from the library onto a timeline track. Dragging creates a copy/reference clip in the timeline; it does not move or delete the managed asset.
 
@@ -555,7 +562,7 @@ If you want an operation without AI, use the manual controls described in Sectio
 6. If the run is unsafe, too broad, or simply no longer wanted, click **Stop**.
 7. If the conversation has become confusing, click **New assistant session**. This clears the assistant history for the current project scope; it does not undo committed editor changes.
 
-The chat shows assistant text and tool updates. **Activity → Native work** shows native operations, affected targets, confirmed project changes, approval waits, and background jobs. A returned job ID means work started, not that it completed. **Cancel** requests cancellation; the final state and any error come from the native job. **Stop** does not undo edits already committed.
+The chat shows assistant text and tool updates. **Activity → Native work** shows native operations, affected targets, confirmed project changes, approval waits, and background jobs. Nonterminal work and failed receipts stay visible by default; completed and cancelled entries are behind **Show history (N)**, which expands the activity history. A returned job ID means work started, not that it completed. **Cancel** requests cancellation; the final state and any error come from the native job. **Stop** does not undo edits already committed.
 
 Activity highlights are separate from your selection. Reads briefly identify inspected targets; confirmed edits can show the affected range, an old clip position, or Inspector before/after values. Dry runs do not animate committed changes. Large changes use bounded highlights rather than animating every item. **Show** explicitly reveals a target outside the current view without selecting it or starting playback. Activity alone does not take your focus, scroll position, or playhead; reduced-motion preferences are respected.
 
@@ -696,7 +703,7 @@ These shortcuts are implemented by the current UI. Global workspace bindings app
 | `Shift+Delete` | Remove selected range with ripple | Requires a non-empty ruler range for range removal. With no valid range, it falls through to deleting selected clips, so verify the highlighted range before pressing it. This is destructive to later timing but undoable. |
 | `Ctrl/Cmd+Z` | Undo | Project history, revision-checked. |
 | `Ctrl/Cmd+Shift+Z` | Redo | Project history, revision-checked. |
-| `Ctrl/Cmd+I` | Import media | Opens the native media chooser. |
+| `Ctrl/Cmd+I` | Import | Opens the native media chooser. |
 | `Ctrl/Cmd+S` | Save project | Synchronizes the current project file and directory; edits are already atomically persisted. No Save As chooser. |
 | `Ctrl/Cmd+E` | Open Export video | Opens export; it does not silently begin rendering until destination/permissions are handled. |
 | `Enter` | Send assistant prompt | In **Describe an edit…**; use `Shift+Enter` for a new line. |
@@ -706,7 +713,7 @@ These shortcuts are implemented by the current UI. Global workspace bindings app
 | `Arrow Up`/`Arrow Down` | Resize timeline | When the focus is on the **Resize timeline** separator. |
 | `Arrow Left`/`Arrow Right` | Resize Assistant | When the focus is on the **Resize assistant** separator. |
 
-`Ctrl` is used on Linux/Windows-style keyboards and `Cmd` on macOS. The app’s save-screen footer displays the platform-neutral `Ctrl/Cmd+I Import`, `Ctrl/Cmd+S Save`, and `Ctrl/Cmd+E Export` hints.
+`Ctrl` is used on Linux/Windows-style keyboards and `Cmd` on macOS. In the workspace, the top bar exposes **Import**, **Save project** in the project-title menu, and **Export** as explicit actions alongside these shortcuts.
 
 `Backspace` is not a timeline-delete shortcut, and `Ctrl/Cmd+Y` is not the implemented redo shortcut.
 
@@ -717,28 +724,31 @@ This workflow intentionally uses only controls that are visible and implemented.
 ### 13.1 Create a portrait captioned cut
 
 1. Launch the Linux x64 AppImage and confirm **Desktop ready**.
-2. Under **New project**, enter `Portrait demo` as **Project name**.
-3. Set **Aspect** to **Portrait · 9:16**.
-4. Leave **Frame rate** at **30 fps**, click **Create project**, and select the parent folder. Note the resulting `Portrait demo.cutproj` path.
-5. Open **Media** and click **Import media**.
-6. Select one video with an audio stream and, optionally, a separate WAV file or still PNG/JPEG/WebP.
-7. Wait until the imported card has a thumbnail/duration and no **Preparing normalized media…** warning.
-8. Select the video card and click **Add to timeline**; this appends it to the end of the first video track, not at the playhead. Select an audio card and add it to **Main Audio** if you need a separate music/voice layer; the default audio insertion starts at frame 0 and is capped to the existing timeline duration.
-9. Click the video clip in **Timeline**. In **Inspector**, confirm **Timing** and set **Fit** to **Contain** if you want the complete frame visible. Click **Apply timing** only after checking the whole-frame values.
-10. Play the project. If the preview remains unavailable, toggle the quality button from **auto** to **software**, then click **Retry preview** if shown.
-11. Drag the timeline ruler over an unwanted opening section. Confirm the start/end frames in the range highlight **before** pressing `Shift+Delete`; with no valid range, that shortcut deletes selected clips instead. Immediately use **Undo** if the ripple result affects a track you meant to preserve.
-12. Put the playhead on a clean boundary, select the clip, and press `S` to split. Do not split inside a dissolve; this example has none.
-13. Select the **Transcript** tab and choose the video under **Audio/video source**.
-14. Click **Transcribe locally**. On first use, review **Download local speech model?**. If you accept the one-time download, click **Download and transcribe**; otherwise click **Not now** and continue with manual text or **Import SRT**.
-15. Search for a phrase using **Find a phrase**. Click a result to seek to its source range and verify the words against the audio.
-16. Select the matching video clip in the timeline and click **Apply captions**. Review each `CC` block in **Timeline**. Reapplying later will replace all captions owned by this clip, so finish any transcript-derived caption edits after the last application.
-17. Return to **Media** or use **Add title** at the current playhead. Select the title block, edit **Text**, and adjust **Style**, size, and positions in **Inspector**.
-18. Select the first clip, identify the next clip, and use **Transitions** → **Frames** → **Dissolve next** to add a short dissolve only if both clips are long enough. Preview the overlap.
-19. Use **Gain · dB**, **Fade in**, and **Fade out** to balance audio. **Clip audio** can exclude audio from the selected video- or audio-track clip. **Mute** silences a track's audio in preview/export; muting a video track leaves its video visible.
-20. Save with `Ctrl/Cmd+S`. Wait for **Saved locally**.
-21. Click **Export**. Choose `1080p` for a full-size portrait deliverable, check **SRT caption sidecar** if a separate subtitle file is wanted, and start the export.
-22. Choose the MP4 destination. Review and answer its mandatory **Allow once** request and the separate SRT request if enabled; inspect existing-file overwrite details for each.
-23. Wait for **Export complete** and 100% progress. Use **Play** to watch the finalized MP4, and **Show file** to reveal it. Keep the MP4 and `.srt` together if you selected the sidecar.
+2. On the start screen, click **Start a new project**.
+3. On **Choose a visual format**, select **Vertical video** — **9:16**, **1080 × 1920** — for **Shorts · Reels · TikTok**.
+4. Click **Continue to details**.
+5. On **Name and review your project**, enter `Portrait demo` as **Project name**.
+6. Leave **Advanced settings** closed and confirm the **Frame rate** summary is **30 fps**.
+7. Click **Create project**, choose the parent folder in the native dialog, and note the resulting `Portrait demo.cutproj` path.
+8. Open **Media** and click **Import media** (or use the top-bar **Import** button).
+9. Select one video with an audio stream and, optionally, a separate WAV file or still PNG/JPEG/WebP.
+10. Wait until the imported card has a thumbnail/duration and no **Preparing normalized media…** warning.
+11. Select the video card and click **Add to timeline**; this appends it to the end of the first video track, not at the playhead. Select an audio card and add it to **Main Audio** if you need a separate music/voice layer; the default audio insertion starts at frame 0 and is capped to the existing timeline duration.
+12. Click the video clip in **Timeline**. In **Inspector**, confirm **Timing** and set **Fit** to **Contain** if you want the complete frame visible. Click **Apply timing** only after checking the whole-frame values.
+13. Play the project. If the preview remains unavailable, toggle the quality button from **auto** to **software**, then click **Retry preview** if shown.
+14. Drag the timeline ruler over an unwanted opening section. Confirm the start/end frames in the range highlight **before** pressing `Shift+Delete`; with no valid range, that shortcut deletes selected clips instead. Immediately use **Undo** if the ripple result affects a track you meant to preserve.
+15. Put the playhead on a clean boundary, select the clip, and press `S` to split. Do not split inside a dissolve; this example has none.
+16. Select the **Transcript** tab and choose the video under **Audio/video source**.
+17. Click **Transcribe locally**. On first use, review **Download local speech model?**. If you accept the one-time download, click **Download and transcribe**; otherwise click **Not now** and continue with manual text or **Import SRT**.
+18. Search for a phrase using **Find a phrase**. Click a result to seek to its source range and verify the words against the audio.
+19. Select the matching video clip in the timeline and click **Apply captions**. Review each `CC` block in **Timeline**. Reapplying later will replace all captions owned by this clip, so finish any transcript-derived caption edits after the last application.
+20. Return to **Media** or use **Add title** at the current playhead. Select the title block, edit **Text**, and adjust **Style**, size, and positions in **Inspector**.
+21. Select the first clip, identify the next clip, and use **Transitions** → **Frames** → **Dissolve next** to add a short dissolve only if both clips are long enough. Preview the overlap.
+22. Use **Gain · dB**, **Fade in**, and **Fade out** to balance audio. **Clip audio** can exclude audio from the selected video- or audio-track clip. **Mute** silences a track's audio in preview/export; muting a video track leaves its video visible.
+23. Save with `Ctrl/Cmd+S` or **Save project**. Wait for **Saved locally**.
+24. Click **Export**. Choose `1080p` for a full-size portrait deliverable, check **SRT caption sidecar** if a separate subtitle file is wanted, and start the export.
+25. Choose the MP4 destination. Review and answer its mandatory **Allow once** request and the separate SRT request if enabled; inspect existing-file overwrite details for each.
+26. Wait for **Export complete** and 100% progress. Use **Play** to watch the finalized MP4, and **Show file** to reveal it. Keep the MP4 and `.srt` together if you selected the sidecar.
 
 ### 13.2 Optional Pi-assisted variation
 
@@ -760,17 +770,17 @@ Before the first prompt in an unapproved context—including either example abov
 
 ## 14. Troubleshooting
 
-### “Browser preview · native required”
+### “Browser preview · desktop required”
 
 You are not connected to the native desktop bridge. Launch the Linux x64 AppImage itself. Browser mode is not sufficient for native project dialogs, media imports, normalization, transcript model download, export, or permission prompts.
 
 ### The start screen does not create a project
 
-- Confirm the native save/location dialog was not cancelled.
+- If you cancelled the parent-folder chooser, return to the details step and try again; the selected format, name, and frame rate remain in the wizard.
 - Use a writable, real local directory.
-- Do not choose a directory that already contains a project if you intended **New project**; the store refuses to overwrite an existing project at that location.
+- Do not choose a directory that already contains a project if you intended **Start a new project**; the store refuses to overwrite an existing project at that location.
 - Check that the name is not only whitespace.
-- Choose one of the supported aspect/frame-rate combinations.
+- Choose one of the three format cards and one of the supported frame rates.
 
 ### “The project is busy” or another instance is open
 
@@ -920,8 +930,8 @@ Do not copy only `project.json`, only the `media` folder, or only the AppImage a
 
 - This guide verifies the Linux x64 AppImage workflow. Windows and macOS are unverified.
 - Browser preview is not a native desktop runtime; native file access, normalization, provider auth, permissions, and export require the desktop bridge.
-- Project aspects are limited to 16:9, 9:16, and 1:1.
-- Project frame rates are limited to 24, 25, 30, and 60 fps. Timeline timing is integer frame-based.
+- Project aspects are limited to the **Vertical video** 9:16 (1080 × 1920), **Landscape** 16:9 (1920 × 1080), and **Square** 1:1 (1080 × 1080) cards.
+- Project frame rates are limited to 24, 25, 30, and 60 fps; **30 fps** is the default and the other choices are under **Advanced settings**. Timeline timing is integer frame-based.
 - Native export offers 720p and 1080p choices and produces H.264 video with AAC, 48 kHz stereo audio after validation. Arbitrary dimensions/codecs are not exposed by the current export surface.
 - Import rejects playlists and network media (including HLS/DASH/concat/segment/HTTP/RTSP paths) and requires an allowed standalone demuxer/decodable stream.
 - Transcription requires normalized 48 kHz stereo audio and the native-pinned multilingual model, or an imported SRT for the manual-caption route. Generated wording/timing requires review.

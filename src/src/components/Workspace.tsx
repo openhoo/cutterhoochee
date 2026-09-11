@@ -2,8 +2,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   ChevronDown,
-  ChevronRight,
-  CircleHelp,
   Download,
   Film,
   FolderOpen,
@@ -18,6 +16,7 @@ import {
   Settings2,
   Sun,
   Undo2,
+  Upload,
   X,
 } from "lucide-react";
 
@@ -362,7 +361,7 @@ export function Workspace({
         const request = permissionFromValue(data);
         if (request && permissionAnswering.current !== request.operationId) setPermission(request);
       }
-      if (eventKind.includes("job") || eventKind.includes("media") || eventKind.includes("export")) {
+      if (eventKind !== "media_drop_failed" && (eventKind.includes("job") || eventKind.includes("media") || eventKind.includes("export"))) {
         const text = eventText(nextEvent);
         if (text) setNotice(text);
       }
@@ -602,22 +601,25 @@ export function Workspace({
             <span className="brand-name">Cutterhoochee</span>
           </div>
           <span className="topbar-divider" aria-hidden="true" />
-          <button className="project-name-button" type="button" onClick={() => void onOpenProject().catch((error) => setNotice(errorMessage(error)))} title="Open another project">
-            {snapshot.document.name}
-            <ChevronDown aria-hidden="true" />
-          </button>
+          <details className="project-menu" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }} onKeyDown={(event) => { if (event.key === "Escape") { event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}>
+            <summary className="project-name-button" aria-label={`Project menu: ${snapshot.document.name}`}>{snapshot.document.name}<ChevronDown aria-hidden="true" /></summary>
+            <div className="project-menu-actions" onClick={(event) => { if ((event.target as HTMLElement).closest("button")) { const menu = event.currentTarget.closest("details"); if (menu) { menu.open = false; menu.querySelector("summary")?.focus(); } } }}>
+              <button type="button" onClick={() => void onOpenProject().catch((error) => setNotice(errorMessage(error)))}><FolderOpen aria-hidden="true" />Open project…</button>
+              <button type="button" onClick={() => void projectCommand({ method: "project_save", params: {} }).catch(() => undefined)}>Save project<span>Ctrl/Cmd+S</span></button>
+              <button type="button" onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}Switch to {theme === "dark" ? "light" : "dark"} theme</button>
+              <button type="button" onClick={() => setProviderSettingsOpen(true)}><Settings2 aria-hidden="true" />Provider settings</button>
+              <button type="button" onClick={() => void projectCommand({ method: "project_close", params: {} }).then(onClose).catch(() => undefined)}><X aria-hidden="true" />Close project</button>
+            </div>
+          </details>
           <span className="save-state"><span className="save-dot" />{statusLabel}</span>
         </div>
         <div className="topbar-actions">
           <Button variant="ghost" size="icon" aria-label="Undo" onClick={() => void handleHistory("undo")}><Undo2 aria-hidden="true" /></Button>
           <Button variant="ghost" size="icon" aria-label="Redo" onClick={() => void handleHistory("redo")}><Redo2 aria-hidden="true" /></Button>
+          <Button variant="secondary" size="sm" aria-label="Import media" title="Import media (Ctrl/Cmd+I)" onClick={() => void projectCommand({ method: "media", params: { action: "import" } }).catch(() => undefined)}><Upload aria-hidden="true" />Import</Button>
           <Button variant="primary" size="sm" aria-label="Export video" title="Export video (Ctrl/Cmd+E)" onClick={() => setExportOpen(true)}><Download aria-hidden="true" />Export</Button>
           <span className="topbar-divider" aria-hidden="true" />
-          <Button variant="ghost" size="icon" aria-label="Toggle theme" onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
-          </Button>
-          <Button variant="ghost" size="icon" aria-label="Provider settings" onClick={() => setProviderSettingsOpen(true)}><Settings2 aria-hidden="true" /></Button>
-          <Button variant="ghost" size="icon" aria-label="Close project" onClick={() => void projectCommand({ method: "project_close", params: {} }).then(onClose).catch(() => undefined)}><X aria-hidden="true" /></Button>
+          <Button variant="ghost" size="icon" aria-label={rightOpen ? "Hide assistant" : "Open assistant"} aria-pressed={rightOpen} onClick={() => setRightOpen((open) => !open)}>{rightOpen ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}</Button>
         </div>
       </header>
 
@@ -680,8 +682,8 @@ export function Workspace({
           <div className="dialog-actions"><Button variant="ghost" onClick={() => void answerPermission(false)}>Deny</Button><Button onClick={() => void answerPermission(true)}>Allow once</Button></div>
         </DialogContent>
       </Dialog>
-      <Dialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen}><DialogContent className="wide-dialog"><ProviderSettings client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setProviderSettingsOpen(false)} /></DialogContent></Dialog>
-      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent className="wide-dialog"><ExportDialog client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setExportOpen(false)} /></DialogContent></Dialog>
+      <Dialog open={providerSettingsOpen} onOpenChange={setProviderSettingsOpen}><DialogContent className="wide-dialog" showCloseButton={false}><ProviderSettings client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setProviderSettingsOpen(false)} /></DialogContent></Dialog>
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}><DialogContent className="wide-dialog" showCloseButton={false}><ExportDialog client={client} snapshot={snapshot} onNotice={setNotice} onClose={() => setExportOpen(false)} /></DialogContent></Dialog>
     </div>
   );
 }
@@ -702,83 +704,3 @@ const PlaybackToolbarMeta = memo(function PlaybackToolbarMeta({
   const frame = usePlaybackFrame(frameStore);
   return <><span className="quality-pill">{playing ? "Playing" : "Ready"}</span><span>{formatTimecode(frame, fpsNum, fpsDen)} / {formatDuration(duration, fpsNum, fpsDen)}</span></>;
 });
-
-export function StartScreen({
-  client,
-  status,
-  connection,
-  theme,
-  onThemeChange,
-  onProjectReady,
-}: {
-  client: EditorClient;
-  status: ProjectStatus;
-  connection: "connected" | "unavailable";
-  theme: Theme;
-  onThemeChange: (theme: Theme) => void;
-  onProjectReady: (status: ProjectStatus) => Promise<void>;
-}) {
-  const [name, setName] = useState("Untitled project");
-  const [aspect, setAspect] = useState<"16:9" | "9:16" | "1:1">("16:9");
-  const [fpsValue, setFpsValue] = useState("30");
-  const [advanced, setAdvanced] = useState(false);
-  const [busy, setBusy] = useState<"create" | "open" | "import" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [recentProjects, setRecentProjects] = useState<string[]>([]);
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("cutterhoochee.recent-projects");
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed)) setRecentProjects(parsed.filter((value): value is string => typeof value === "string").slice(0, 5));
-    } catch {
-      setRecentProjects([]);
-    }
-  }, []);
-
-  const run = async (action: "create" | "open" | "import", paths?: string[]) => {
-    setBusy(action);
-    setError(null);
-    try {
-      if (action === "create") {
-        await callNative(client, { method: "project_create", params: { name: name.trim() || "Untitled project", aspect, fpsNum: Number(fpsValue), fpsDen: 1 } });
-      } else if (action === "open") {
-        await callNative(client, { method: "project_open", params: {} });
-      } else {
-        if (!status.open) {
-          await callNative(client, { method: "project_create", params: { name: name.trim() || "Untitled project", aspect, fpsNum: Number(fpsValue), fpsDen: 1 } });
-        }
-        const validPaths = paths?.filter((path) => path.trim().length > 0);
-        await callNative(client, { method: "media", params: validPaths && validPaths.length > 0 ? { action: "import", paths: validPaths } : { action: "import" } });
-      }
-      const nextStatus = await client.projectStatus();
-      if (nextStatus.name) {
-        const next = [nextStatus.name, ...recentProjects.filter((projectName) => projectName !== nextStatus.name)].slice(0, 5);
-        setRecentProjects(next);
-        try { window.localStorage.setItem("cutterhoochee.recent-projects", JSON.stringify(next)); } catch { /* Recent names are a convenience only. */ }
-      }
-      await onProjectReady(nextStatus);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="start-shell">
-      <header className="start-topbar"><div className="brand-lockup"><span className="brand-mark"><Film aria-hidden="true" /></span><span className="brand-name">Cutterhoochee</span></div><div className="topbar-actions"><span className="connection-chip"><span className={connection === "connected" ? "status-dot" : "status-dot muted"} />{connection === "connected" ? "Desktop ready" : "Browser preview · native required"}</span><Button variant="ghost" size="icon" aria-label="Toggle theme" onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}</Button></div></header>
-      <main className="start-content"><div className="start-intro"><p className="eyebrow">Local-first video editing</p><h1>Make something worth watching.</h1><p>Shape footage, sound, captions, and ideas in one calm timeline. Your project stays on this device until you explicitly share evidence.</p></div>
-        <div className="start-grid"><section className="start-card primary"><div className="start-card-icon"><PlusIcon /></div><h2>New project</h2><p>Start with a clean timeline and choose the format that fits your story.</p><label className="field-label" htmlFor="project-name">Project name</label><input id="project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Untitled project" /><div className="field-row"><label className="field-group"><span className="field-label">Aspect</span><select value={aspect} onChange={(event) => setAspect(event.target.value as typeof aspect)}><option value="16:9">Landscape · 16:9</option><option value="9:16">Portrait · 9:16</option><option value="1:1">Square · 1:1</option></select></label><label className="field-group"><span className="field-label">Frame rate</span><select value={fpsValue} onChange={(event) => setFpsValue(event.target.value)}><option value="30">30 fps</option>{advanced ? <><option value="24">24 fps</option><option value="25">25 fps</option><option value="60">60 fps</option></> : null}</select></label></div><button className="advanced-toggle" type="button" onClick={() => setAdvanced((open) => !open)}><ChevronRight className={advanced ? "rotate-90" : ""} aria-hidden="true" />Advanced format options</button><Button size="lg" className="start-action" disabled={busy !== null} onClick={() => void run("create")}><PlusIcon />{busy === "create" ? "Creating…" : "Create project"}</Button></section>
-          <section className="start-card"><div className="start-card-icon muted"><FolderOpen aria-hidden="true" /></div><h2>Continue editing</h2><p>Open a saved <code>.cutproj</code> directory. Native dialogs keep file access explicit.</p><div className="stack-actions"><Button variant="secondary" disabled={busy !== null} onClick={() => void run("open")}><FolderOpen aria-hidden="true" />{busy === "open" ? "Opening…" : "Open project"}</Button><Button variant="ghost" disabled={busy !== null} onClick={() => void run("import")}><Download aria-hidden="true" />Import media</Button></div>{status.open ? <p className="small-note">A project is already open; refresh the desktop window to reconnect it.</p> : <p className="small-note">Recent projects appear here after the first native save.</p>}</section>
-            {recentProjects.length > 0 ? <div className="recent-projects"><span className="field-label">Recent projects</span>{recentProjects.map((projectName) => <button type="button" key={projectName} onClick={() => void run("open")}><span className="recent-project-icon"><FolderOpen aria-hidden="true" /></span><span>{projectName}</span><ChevronRight aria-hidden="true" /></button>)}</div> : null}
-        </div>
-        <div className="drop-target" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const paths = Array.from(event.dataTransfer.files).map((file) => { if ("path" in file && typeof file.path === "string") return file.path; return ""; }).filter((path) => path.length > 0); void run("import", paths); }}><Download aria-hidden="true" /><div><strong>Drop media to import</strong><span>Video, audio, PNG, JPEG, or WebP · native grant required</span></div><ChevronRight aria-hidden="true" /></div>
-        {error ? <div className="start-error" role="alert"><CircleHelp aria-hidden="true" /><span>{error}</span></div> : null}
-      </main><footer className="start-footer"><span>Offline by default · no telemetry</span><span>Ctrl/Cmd+I Import&nbsp;&nbsp;Ctrl/Cmd+S Save&nbsp;&nbsp;Ctrl/Cmd+E Export</span></footer>
-    </div>
-  );
-}
-
-function PlusIcon() {
-  return <span className="plus-glyph" aria-hidden="true">+</span>;
-}
