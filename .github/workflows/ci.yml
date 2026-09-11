@@ -55,7 +55,6 @@ jobs:
 
   policy:
     name: Policy and security gates
-    needs: commitlint
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -101,7 +100,6 @@ jobs:
 
   frontend:
     name: Frontend and agent build
-    needs: commitlint
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -131,10 +129,6 @@ jobs:
 
   native:
     name: Linux x86_64 native qualification
-    needs:
-      - commitlint
-      - policy
-      - frontend
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     container:
@@ -172,6 +166,12 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
           rustup default "$RUST_VERSION"
           test "$(rustc --version | awk '{ print $2 }')" = "$RUST_VERSION"
+      - name: Cache native Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          key: arch-${{ env.ARCH_SNAPSHOT }}-${{ hashFiles('src-tauri/vendor/**') }}
+          env-vars: ARCH_IMAGE
       - name: Set up Node.js and pnpm
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
